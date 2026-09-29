@@ -1,21 +1,17 @@
--- Run this once in Supabase: SQL Editor -> New query -> paste -> Run.
--- BEFORE running, replace the two codes below with your own.
-
 create table if not exists public.app_state (
-  id          int primary key default 1 check (id = 1),   -- exactly one group
+  id          int primary key default 1 check (id = 1),
   data        jsonb   not null default '{"players":[],"nights":[]}',
   version     int     not null default 0,
-  view_code   text    not null,      -- friends type this to VIEW
-  admin_code  text    not null,      -- you type this to EDIT
-  public_view boolean not null default false,  -- set true later to let anyone view with no code
+  view_code   text    not null,
+  admin_code  text    not null,
+  public_view boolean not null default false,
   updated_at  timestamptz not null default now()
 );
 
 insert into public.app_state (id, view_code, admin_code)
-values (1, 'CHANGE-ME-VIEW-CODE', 'CHANGE-ME-ADMIN-CODE')
+values (1, '1974', '0987')
 on conflict (id) do nothing;
 
--- Lock the table: nobody can read/write it directly, only through the two functions below.
 alter table public.app_state enable row level security;
 
 create or replace function public.get_state(p_code text)
