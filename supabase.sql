@@ -9,7 +9,7 @@ create table if not exists public.app_state (
 );
 
 insert into public.app_state (id, view_code, admin_code)
-values (1, '1974', '0987')
+values (1, 'CHANGE-ME-VIEW-CODE', 'CHANGE-ME-ADMIN-CODE')
 on conflict (id) do nothing;
 
 alter table public.app_state enable row level security;
