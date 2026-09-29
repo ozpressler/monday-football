@@ -1,6 +1,6 @@
 {
-  "name": "Monday Football",
-  "short_name": "Football",
+  "name": "Monday Night Football",
+  "short_name": "MN Football",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f7b3f",

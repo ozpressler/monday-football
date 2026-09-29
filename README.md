@@ -1,4 +1,4 @@
-# Monday Football
+# Monday Night Football
 
 A small PWA for a weekly friends' football group: log games (scorers and assists), track stats, grade players, and auto-build balanced teams.
 

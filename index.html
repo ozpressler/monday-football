@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<title>Monday Football</title>
+<title>Monday Night Football</title>
 <style>
 :root{--bg:#f4f6f5;--card:#fff;--ink:#16211b;--mute:#6b7a72;--line:#e2e8e4;--accent:#0f7b3f;--accent-ink:#fff;--warn:#c2410c;--soft:#e8f3ec}
 @media (prefers-color-scheme:dark){:root{--bg:#0e1411;--card:#18211c;--ink:#e9f0ec;--mute:#93a49a;--line:#26332b;--accent:#2fbf71;--accent-ink:#06210f;--warn:#fb923c;--soft:#1d2b23}}
@@ -45,18 +45,82 @@ tr.clk{cursor:pointer}
 </style>
 </head>
 <body>
-<header><h1>⚽ Monday Football</h1><span class="mute" id="sub"></span></header>
+<header><h1>⚽ Monday Night Football</h1><span class="mute" id="sub"></span></header>
 <main id="app"></main>
 <nav id="nav"></nav>
 <div id="ov"></div>
 
+<script src="config.js"></script>
 <script>
 'use strict';
 /* ---------- data ---------- */
 const KEY = 'mondayfootball.v1';
 let S = load() || { players: [], nights: [] };
 function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { alert('Could not save data (storage full or blocked).'); } }
+function localSave() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { alert('Could not save data (storage full or blocked).'); } }
+function save() { localSave(); if (cloud.on && cloud.admin) queueSync(); }
+
+/* ---------- shared data (Supabase) ---------- */
+const CFG = window.MF_CONFIG || {};
+const lsGet = k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
+const lsSet = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { } };
+const cloud = { on: !!(CFG.url && CFG.key), code: lsGet('mf.code'), authed: false, admin: false, version: 0, status: 'ok', timer: null, syncing: false, dirty: false, err: '' };
+const RO = () => cloud.on && cloud.authed && !cloud.admin;
+async function rpc(fn, args) {
+  const r = await fetch(`${CFG.url}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: CFG.key, 'Content-Type': 'application/json' }, body: JSON.stringify(args) });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+function queueSync() { cloud.dirty = true; cloud.status = 'saving'; clearTimeout(cloud.timer); cloud.timer = setTimeout(sync, 500); updateSub(); }
+async function sync() {
+  if (cloud.syncing) { clearTimeout(cloud.timer); cloud.timer = setTimeout(sync, 500); return; }
+  cloud.syncing = true; cloud.dirty = false;
+  try {
+    const sent = JSON.stringify(S);
+    const r = await rpc('save_state', { p_code: cloud.code, p_data: S, p_version: cloud.version });
+    if (r.error === 'conflict') {
+      cloud.version = r.version;
+      if (JSON.stringify(r.data) === sent) cloud.status = 'ok';   // our own earlier save; nothing lost
+      else { S = r.data; localSave(); cloud.status = 'ok'; ui.matchId = null; ui.draft = null; render(); alert('Another device saved newer data, so the latest version was loaded. Please redo your last change.'); }
+    } else if (r.error) { cloud.status = 'error'; cloud.err = r.error; }
+    else { cloud.version = r.version; cloud.status = cloud.dirty ? 'saving' : 'ok'; }
+  } catch (e) {
+    cloud.status = 'error'; cloud.dirty = true; clearTimeout(cloud.timer); cloud.timer = setTimeout(sync, 8000);
+  }
+  cloud.syncing = false; updateSub();
+}
+async function pull() {
+  if (!cloud.on || !cloud.authed || cloud.admin) return;
+  try {
+    const r = await rpc('get_state', { p_code: cloud.code });
+    if (r.error) return doLogout();
+    if (r.version !== cloud.version) { cloud.version = r.version; S = r.data; localSave(); render(); }
+  } catch { }
+}
+async function doLogin(code, silent) {
+  cloud.err = '';
+  try {
+    const r = await rpc('get_state', { p_code: code });
+    if (r.error) { cloud.authed = false; cloud.code = ''; lsSet('mf.code', ''); cloud.err = silent ? '' : 'That code is not right.'; return render(); }
+    cloud.code = code; lsSet('mf.code', code); cloud.authed = true; cloud.admin = !!r.admin; cloud.version = r.version;
+    const local = S;
+    if (cloud.admin && r.version === 0 && local.players.length) queueSync();   // first time: upload this phone's data
+    else { S = r.data; localSave(); }
+    if (!cloud.admin && !cloud.poll) cloud.poll = setInterval(pull, 20000);
+  } catch (e) { cloud.authed = false; cloud.err = "Can't reach the server. Check your connection and try again."; }
+  render();
+}
+function doLogout() {
+  clearInterval(cloud.poll); cloud.poll = null; clearTimeout(cloud.timer);
+  cloud.authed = false; cloud.admin = false; cloud.code = ''; lsSet('mf.code', ''); S = { players: [], nights: [] };
+  try { localStorage.removeItem(KEY); } catch { }
+  ui.tab = 'night'; ui.draft = null; ui.matchId = null; ui.sheet = null; render();
+}
+function updateSub() {
+  const el = document.getElementById('sub'); if (!el) return;
+  if (cloud.on && cloud.authed) el.textContent = RO() ? 'Viewing' : cloud.status === 'saving' ? 'Saving…' : cloud.status === 'error' ? '⚠ Not saved – retrying' : 'Saved ✓';
+  else el.textContent = activeNight() ? 'Night in progress' : `${finishedNights().length} nights logged`;
+}
 const uid = () => Math.random().toString(36).slice(2, 9);
 const today = () => new Date().toLocaleDateString('en-CA');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -151,17 +215,36 @@ function balance(ids, k) {
 const ui = { tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
 
 function render() {
-  const nav = [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['data', '💾 Data']];
+  if (cloud.on && !cloud.authed) {
+    document.getElementById('nav').innerHTML = ''; document.getElementById('ov').innerHTML = '';
+    document.getElementById('app').innerHTML = `<div class="card" style="margin-top:20px"><h2 style="margin-top:0">Enter group code</h2>
+      <p class="mute">Ask the group admin for the code. Use the admin code to edit, or the viewer code to look at stats.</p>
+      <div class="row"><input id="code" type="password" autocomplete="off" placeholder="Code" class="sp"><button class="pri" data-a="login">Open</button></div>
+      ${cloud.err ? `<p class="down">${esc(cloud.err)}</p>` : ''}</div>`;
+    return updateSub();
+  }
+  const nav = RO() ? [['night', '⚽ Tonight'], ['stats', '📊 Stats'], ['data', '👤 Account']] : [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['data', '💾 Data']];
   document.getElementById('nav').innerHTML = nav.map(([k, l]) => `<button class="${ui.tab === k ? 'on' : ''}" data-a="tab" data-k="${k}">${l}</button>`).join('');
   const v = { night: viewNight, stats: viewStats, players: viewPlayers, data: viewData }[ui.tab]();
   document.getElementById('app').innerHTML = v;
   document.getElementById('ov').innerHTML = ui.sheet ? `<div class="overlay" data-a="closeSheet"><div class="sheet" data-stop>${sheetHtml()}</div></div>` : '';
-  const an = activeNight();
-  document.getElementById('sub').textContent = an ? 'Night in progress' : `${finishedNights().length} nights logged`;
+  updateSub();
 }
 
 /* ---------- Night tab ---------- */
+function viewNightRO() {
+  const n = activeNight();
+  if (!n) return '<div class="card empty"><p><b>No night in progress</b></p><p>When a game night is being logged it shows up here live.</p></div>';
+  const ts = n.teams.map(t => `<div class="card"><div class="row"><span class="dot" style="background:${t.color}"></span><b>${esc(t.name)}</b></div><div>${t.playerIds.map(id => `<span class="pill">${esc(P(id)?.name)}</span>`).join('')}</div></div>`).join('');
+  const ms = n.matches.map((m, i) => {
+    const ta = teamOf(n, m.a), tb = teamOf(n, m.b);
+    const goals = m.goals.map(g => `<div class="mute">⚽ ${g.scorer ? esc(P(g.scorer)?.name) : 'Own goal / unknown'}${g.assist ? ` (assist ${esc(P(g.assist)?.name)})` : ''}</div>`).join('');
+    return `<div class="card"><div class="row"><span class="mute">Game ${i + 1}</span><span class="sp"></span><span class="dot" style="background:${ta.color}"></span><b>${esc(ta.name)} ${score(m, m.a)} – ${score(m, m.b)} ${esc(tb.name)}</b><span class="dot" style="background:${tb.color}"></span></div>${goals}</div>`;
+  }).reverse().join('');
+  return `<h2>Tonight · ${esc(n.date)}</h2>${ts}<h2>Games</h2>${ms || '<div class="empty">No games yet</div>'}<p class="mute">Updates automatically every few seconds.</p>`;
+}
 function viewNight() {
+  if (RO()) return viewNightRO();
   if (ui.draft) return viewSetup();
   const n = activeNight();
   if (!n) {
@@ -251,7 +334,7 @@ function viewStats() {
   const tabs = `<div class="tabs"><button class="${ui.view === 'players' ? 'on' : ''}" data-a="view" data-k="players">Players</button><button class="${ui.view === 'nights' ? 'on' : ''}" data-a="view" data-k="nights">Past nights</button></div>`;
   if (ui.view === 'nights') {
     const ns = finishedNights().slice().reverse();
-    return tabs + (ns.map(n => `<div class="card"><div class="row"><b class="sp">${esc(n.date)}</b><span class="mute">${n.matches.length} games</span><button class="sm" data-a="reopen" data-id="${n.id}">Reopen</button></div>
+    return tabs + (ns.map(n => `<div class="card"><div class="row"><b class="sp">${esc(n.date)}</b><span class="mute">${n.matches.length} games</span>${RO() ? '' : `<button class="sm" data-a="reopen" data-id="${n.id}">Reopen</button>`}</div>
       ${n.matches.map(m => { const a = teamOf(n, m.a), b = teamOf(n, m.b); return `<div class="mute">${esc(a.name)} ${score(m, m.a)} – ${score(m, m.b)} ${esc(b.name)}</div>`; }).join('')}</div>`).join('') || '<div class="empty">No finished nights yet</div>');
   }
   const cols = [['grade', 'Grade'], ['gp', 'GP'], ['wr', 'Win%'], ['g', 'G'], ['a', 'A'], ['ga', 'G+A'], ['gpg', 'G+A/gm']];
@@ -280,7 +363,9 @@ function viewPlayers() {
 
 /* ---------- Data tab ---------- */
 function viewData() {
-  return `<div class="card"><b>Backup</b><p class="mute">All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.</p>
+  const acct = cloud.on ? `<div class="card"><b>Group access</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p><button data-a="logout">Sign out</button></div>` : '';
+  if (RO()) return acct;
+  return acct + `<div class="card"><b>Backup</b><p class="mute">${cloud.on ? 'Data is stored in the shared database. A backup file is still a good safety copy.' : 'All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.'}</p>
     <div class="row"><button class="pri" data-a="export">Export backup</button><button data-a="importPick">Import backup</button></div>
     <input type="file" id="file" accept="application/json" hidden></div>
   <div class="card"><b>How grades work</b><p class="mute">Each player's grade (1–10) blends their win rate, goals + assists per game, and the goal difference of their teams, using recent nights more than old ones. New players lean on their starting grade until they have enough games. Grades update when you finish a night.</p></div>
@@ -320,6 +405,8 @@ function sheetHtml() {
 
 /* ---------- actions ---------- */
 const A = {
+  login: () => { doLogin(document.getElementById('code').value.trim(), false); },
+  logout: () => { if (confirm('Sign out on this device?')) doLogout(); },
   tab: d => { ui.tab = d.k; ui.sheet = null; },
   view: d => { ui.view = d.k; },
   closeSheet: () => { ui.sheet = null; },
@@ -383,7 +470,7 @@ const A = {
   toggleActive: d => { const p = P(d.p); p.inactive = !p.inactive; save(); },
   export: () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
-    const a = document.createElement('a'); a.href = url; a.download = `monday-football-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const a = document.createElement('a'); a.href = url; a.download = `monday-night-football-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   importPick: () => document.getElementById('file').click(),
   wipe: () => { if (confirm('Delete ALL players and games? This cannot be undone.') && confirm('Really delete everything?')) { S = { players: [], nights: [] }; save(); } },
@@ -394,6 +481,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-stop]') && !e.target.closest('[data-a]')) return;
   const t = e.target.closest('[data-a]'); if (!t) return;
   const f = A[t.dataset.a]; if (!f) return;
+  if (cloud.on && (!cloud.authed || RO()) && !['tab', 'view', 'sort', 'player', 'closeSheet', 'login', 'logout'].includes(t.dataset.a)) return;
   f(t.dataset); render();
 });
 document.addEventListener('change', e => {
@@ -417,7 +505,8 @@ document.addEventListener('change', e => {
   render();
 });
 
-render();
+if (cloud.on) { render(); doLogin(cloud.code, true); } else render();
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'code') A.login(); });
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
