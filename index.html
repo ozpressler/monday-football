@@ -302,30 +302,44 @@ function draftFromNight(n) {
 }
 function viewSetup() {
   const d = ui.draft, G = grades();
-  const present = activePlayers().filter(p => d.att[p.id]);
+  const all = activePlayers();
+  const present = all.filter(p => d.att[p.id]);
   const teamBtns = p => Array.from({ length: d.k }, (_, i) => `<button class="sm" style="${d.assign[p.id] === i ? `background:${COLORS[i].c};color:#fff;border-color:${COLORS[i].c}` : ''}" data-a="assign" data-p="${p.id}" data-i="${i}">${COLORS[i].n[0]}</button>`).join('');
-  const mixed = S.players.some(x => !x.inactive && x.regular) && S.players.some(x => !x.inactive && !x.regular);
-  let lastReg = null;
-  const rows = activePlayers().map(p => {
-    const head = mixed && !!p.regular !== lastReg ? `<div class="mute" style="padding:8px 0 2px">${p.regular ? '⭐ Regulars' : 'Others'}</div>` : '';
-    lastReg = !!p.regular;
-    return head + `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)">
+  const row = p => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)">
       <label class="row sp" style="cursor:pointer"><input type="checkbox" ${d.att[p.id] ? 'checked' : ''} data-c="att" data-p="${p.id}"> <span>${esc(p.name)}</span><span class="grade">${G[p.id].grade.toFixed(1)}</span></label>
       ${d.att[p.id] ? teamBtns(p) : ''}</div>`;
+  const byGrade = (a, b) => G[b.id].grade - G[a.id].grade;
+
+  const teamSecs = Array.from({ length: d.k }, (_, i) => {
+    const ids = present.filter(p => d.assign[p.id] === i).sort(byGrade);
+    if (!ids.length) return '';
+    const avg = ids.reduce((s, p) => s + G[p.id].grade, 0) / ids.length;
+    return `<div class="card" style="border-left:6px solid ${COLORS[i].c}"><div class="row" style="margin-bottom:4px"><span class="dot" style="background:${COLORS[i].c}"></span><b>${COLORS[i].n}</b>
+      <span class="mute">${ids.length} players</span><span class="sp"></span><span class="mute">avg grade</span><b>${avg.toFixed(2)}</b></div>${ids.map(row).join('')}</div>`;
   }).join('');
-  const sums = Array.from({ length: d.k }, (_, i) => {
-    const ids = present.filter(p => d.assign[p.id] === i);
-    const avg = ids.length ? ids.reduce((s, p) => s + G[p.id].grade, 0) / ids.length : 0;
-    return `<div class="card" style="text-align:center"><span class="dot" style="background:${COLORS[i].c}"></span> <b>${COLORS[i].n}</b><div>${ids.length} players</div><div class="mute">avg grade</div><b>${avg.toFixed(2)}</b></div>`;
+
+  const unassigned = present.filter(p => d.assign[p.id] == null).sort(byGrade);
+  const unSec = unassigned.length ? `<div class="card"><b>Here, no team yet</b> <span class="mute">(${unassigned.length}) tap a colour</span>${unassigned.map(row).join('')}</div>` : '';
+
+  const absent = all.filter(p => !d.att[p.id]);
+  const mixed = absent.some(p => p.regular) && absent.some(p => !p.regular);
+  let lastReg = null;
+  const absentRows = absent.map(p => {
+    const head = mixed && !!p.regular !== lastReg ? `<div class="mute" style="padding:8px 0 2px">${p.regular ? '⭐ Regulars' : 'Others'}</div>` : '';
+    lastReg = !!p.regular;
+    return head + row(p);
   }).join('');
-  return `<div class="row"><h2 class="sp">${d.edit ? 'Edit teams' : 'Who\'s here tonight?'}</h2><button class="sm" data-a="cancelDraft">Cancel</button></div>
+  const title = present.length ? 'Not here' : "Who's here tonight?";
+  const absSec = `<div class="card"><div class="row"><b class="sp">${title}</b>${absent.some(p => p.regular) ? '<button class="sm" data-a="tickRegulars">Tick all regulars</button>' : ''}</div>
+    ${absentRows || (all.length ? '<div class="mute" style="padding:6px 0">Everyone is here 🎉</div>' : '<div class="empty">No players yet. Add them below or in the Players tab.</div>')}
+    <div class="row" style="margin-top:10px"><input id="quick" placeholder="New player name" class="sp"><button data-a="quickAdd">Add</button></div></div>`;
+
+  return `<div class="row"><h2 class="sp">${d.edit ? 'Edit teams' : 'Set up tonight'}</h2><button class="sm" data-a="cancelDraft">Cancel</button></div>
     <div class="card"><div class="row"><span>Date</span><input type="date" value="${d.date}" data-c="ddate"><span class="sp"></span><span>Teams</span>
       <select data-c="dk">${[2, 3, 4].map(k => `<option ${k === d.k ? 'selected' : ''}>${k}</option>`).join('')}</select></div></div>
-    <div class="card">${S.players.some(p => p.regular && !p.inactive) ? '<button class="sm" data-a="tickRegulars">Tick all regulars</button>' : ''}${rows || '<div class="empty">No players yet. Add them in the Players tab.</div>'}
-      <div class="row" style="margin-top:10px"><input id="quick" placeholder="New player name" class="sp"><button data-a="quickAdd">Add</button></div></div>
-    <div class="grid" style="grid-template-columns:repeat(${d.k},1fr)">${sums}</div>
-    <div class="row"><button data-a="autoBalance" ${present.length >= d.k ? '' : 'disabled'}>🎲 Auto-balance (${present.length} here)</button><span class="sp"></span>
-      <button class="pri" data-a="beginNight">${d.edit ? 'Save teams' : 'Start night'}</button></div>`;
+    <div class="row" style="margin-bottom:10px"><button data-a="autoBalance" ${present.length >= d.k ? '' : 'disabled'}>🎲 Auto-balance (${present.length} here)</button><span class="sp"></span>
+      <button class="pri" data-a="beginNight">${d.edit ? 'Save teams' : 'Start night'}</button></div>
+    ${teamSecs}${unSec}${absSec}`;
 }
 
 /* ---------- Stats tab ---------- */
