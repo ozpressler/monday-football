@@ -258,7 +258,7 @@ function viewNight() {
   const opts = sel => n.teams.map(t => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
   const ms = n.matches.map((m, i) => {
     const ta = teamOf(n, m.a), tb = teamOf(n, m.b);
-    return `<div class="card" data-a="openMatch" data-id="${m.id}" style="cursor:pointer"><div class="row"><span class="mute">Game ${i + 1}</span><span class="sp"></span>
+    return `<div class="card" data-a="openMatch" data-id="${m.id}" style="cursor:pointer"><div class="row"><span class="mute">Game ${i + 1}${m.saved ? ' ✓' : ' · in progress'}</span><span class="sp"></span>
       <span class="dot" style="background:${ta.color}"></span><b>${esc(ta.name)} ${score(m, m.a)} – ${score(m, m.b)} ${esc(tb.name)}</b><span class="dot" style="background:${tb.color}"></span></div></div>`;
   }).reverse().join('');
   return `<div class="row"><h2 class="sp">Tonight · ${esc(n.date)}</h2><button class="sm" data-a="editTeams">Edit teams</button></div>${ts}
@@ -284,6 +284,7 @@ function viewMatch(n, m) {
   return `<div class="row"><button class="sm" data-a="closeMatch">← Back</button><span class="sp"></span><button class="sm danger" data-a="delMatch">Delete game</button></div>
     <div class="card" style="margin-top:10px"><div class="score">${score(m, m.a)} – ${score(m, m.b)}</div>
     <div class="row" style="justify-content:center"><span class="dot" style="background:${ta.color}"></span>${esc(ta.name)} <span class="mute">vs</span> ${esc(tb.name)}<span class="dot" style="background:${tb.color}"></span></div></div>
+    <button class="pri" data-a="saveMatch" style="width:100%;padding:14px">${m.saved ? '✓ Saved · Back to night' : 'Save game'}</button>
     <p class="mute" style="text-align:center">Tap the scorer, then choose the assist</p>
     <div class="grid g2">${col(ta)}${col(tb)}</div>
     <h2>Goals</h2><div class="card">${log || '<span class="mute">No goals yet</span>'}</div>`;
@@ -459,18 +460,19 @@ const A = {
   },
   openMatch: d => { ui.matchId = d.id; },
   closeMatch: () => { ui.matchId = null; },
+  saveMatch: () => { const m = activeNight().matches.find(x => x.id === ui.matchId); m.saved = true; ui.matchId = null; save(); },
   delMatch: () => { if (!confirm('Delete this game?')) return; const n = activeNight(); n.matches = n.matches.filter(m => m.id !== ui.matchId); ui.matchId = null; save(); },
   goal: d => { ui.sheet = { type: 'assist', teamId: d.team, scorer: d.p || null }; },
   assist: d => {
     const n = activeNight(), m = n.matches.find(x => x.id === ui.matchId), s = ui.sheet;
-    m.goals.push({ id: uid(), teamId: s.teamId, scorer: s.scorer, assist: d.p || null }); ui.sheet = null; save();
+    m.goals.push({ id: uid(), teamId: s.teamId, scorer: s.scorer, assist: d.p || null }); m.saved = false; ui.sheet = null; save();
   },
-  delGoal: d => { const m = activeNight().matches.find(x => x.id === ui.matchId); m.goals = m.goals.filter(g => g.id !== d.id); save(); },
+  delGoal: d => { const m = activeNight().matches.find(x => x.id === ui.matchId); m.goals = m.goals.filter(g => g.id !== d.id); m.saved = false; save(); },
   discardNight: () => { if (!confirm('Discard tonight completely? All games will be lost.')) return; S.nights = S.nights.filter(n => n.finished); ui.matchId = null; save(); },
   finishNight: () => {
     const n = activeNight();
     if (!confirm(`Finish the night (${n.matches.length} games) and update grades?`)) return;
-    const before = grades(); n.finished = true; save(); const after = grades();
+    const before = grades(); n.finished = true; n.matches.forEach(m => m.saved = true); save(); const after = grades();
     const changes = S.players.filter(p => n.teams.some(t => t.playerIds.includes(p.id)))
       .map(p => ({ name: p.name, from: before[p.id].grade, to: after[p.id].grade })).sort((a, b) => (b.to - b.from) - (a.to - a.from));
     ui.sheet = { type: 'finish', changes }; ui.matchId = null;
