@@ -90,3 +90,24 @@ end $$;
 grant execute on function public.get_state(text, text) to anon;
 grant execute on function public.save_state(text, text, jsonb, int) to anon;
 grant execute on function public.create_group(text, text, text, text) to anon;
+
+create or replace function public.rename_group(p_group text, p_code text, p_new_name text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  r public.app_groups;
+  nm text := lower(trim(coalesce(p_new_name, '')));
+begin
+  select * into r from public.app_groups where name = lower(trim(coalesce(p_group, ''))) for update;
+  if not found or coalesce(p_code, '') <> r.admin_code then
+    return jsonb_build_object('error', 'forbidden');
+  end if;
+  if char_length(nm) < 2 or char_length(nm) > 40 then
+    return jsonb_build_object('error', 'invalid');
+  end if;
+  update public.app_groups set name = nm, display_name = trim(p_new_name), updated_at = now() where name = r.name;
+  return jsonb_build_object('ok', true, 'name', trim(p_new_name));
+exception when unique_violation then
+  return jsonb_build_object('error', 'exists');
+end $$;
+
+grant execute on function public.rename_group(text, text, text) to anon;

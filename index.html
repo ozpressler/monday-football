@@ -128,6 +128,21 @@ async function doCreate() {
   } catch (e) { cloud.err = "Can't reach the server. Check your connection and try again."; }
   render();
 }
+async function doRename() {
+  const el = document.getElementById('newgname'), nm = (el ? el.value : '').trim();
+  if (!nm || nm === cloud.name) return;
+  if (nm.length < 2 || nm.length > 40) return alert('The group name must be 2 to 40 characters.');
+  if (!confirm(`Rename the group to "${nm}"?\n\nEveryone must use the new name to sign in from now on.`)) return;
+  try {
+    const r = await rpc('rename_group', { p_group: cloud.group, p_code: cloud.code, p_new_name: nm });
+    if (r.error === 'exists') alert('That group name is already taken.');
+    else if (r.error) alert('Could not rename the group.');
+    else { cloud.group = nm; cloud.name = nm; lsSet('mf.group', nm); }
+  } catch (e) {
+    alert(String(e.message).includes('404') ? 'The database needs updating first. Run the latest supabase.sql in Supabase.' : "Can't reach the server. Check your connection and try again.");
+  }
+  render();
+}
 function doLogout() {
   clearInterval(cloud.poll); cloud.poll = null; clearTimeout(cloud.timer);
   cloud.authed = false; cloud.admin = false; cloud.code = ''; lsSet('mf.code', ''); cloud.name = ''; cloud.mode = 'login'; cloud.err = ''; S = { players: [], nights: [] };
@@ -477,7 +492,8 @@ function viewSettings() {
 }
 
 /* ---------- Data tab ---------- */
-const acctCard = () => cloud.on ? `<div class="card"><b>Group: ${esc(cloud.name)}</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p><button data-a="logout">Sign out</button></div>` : '';
+const acctCard = () => cloud.on ? `<div class="card"><b>Group: ${esc(cloud.name)}</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p>
+  ${RO() ? '' : `<div class="row" style="margin-bottom:10px"><input id="newgname" value="${esc(cloud.name)}" class="sp" placeholder="Group name" autocomplete="off"><button data-a="renameGroup">Rename</button></div>`}<button data-a="logout">Sign out</button></div>` : '';
 function viewData() {
   if (RO()) return acctCard();
   return `<div class="card"><b>Backup</b><p class="mute">${cloud.on ? 'Data is stored in the shared database. A backup file is still a good safety copy.' : 'All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.'}</p>
@@ -526,6 +542,7 @@ function sheetHtml() {
 /* ---------- actions ---------- */
 const A = {
   login: () => { doLogin(document.getElementById('grp').value.trim(), document.getElementById('code').value.trim(), false); },
+  renameGroup: () => { doRename(); },
   showCreate: () => { cloud.mode = 'create'; cloud.err = ''; },
   showLogin: () => { cloud.mode = 'login'; cloud.err = ''; },
   createGroup: () => { doCreate(); },
