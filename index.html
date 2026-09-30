@@ -65,7 +65,7 @@ function save() { localSave(); if (cloud.on && cloud.admin) queueSync(); }
 const CFG = window.MF_CONFIG || {};
 const lsGet = k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
 const lsSet = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { } };
-const cloud = { on: !!(CFG.url && CFG.key), code: lsGet('mf.code'), authed: false, admin: false, version: 0, status: 'ok', timer: null, syncing: false, dirty: false, err: '' };
+const cloud = { on: !!(CFG.url && CFG.key), group: lsGet('mf.group'), name: '', mode: 'login', form: {}, code: lsGet('mf.code'), authed: false, admin: false, version: 0, status: 'ok', timer: null, syncing: false, dirty: false, err: '' };
 const RO = () => cloud.on && cloud.authed && !cloud.admin;
 async function rpc(fn, args) {
   const r = await fetch(`${CFG.url}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: CFG.key, 'Content-Type': 'application/json' }, body: JSON.stringify(args) });
@@ -78,7 +78,7 @@ async function sync() {
   cloud.syncing = true; cloud.dirty = false;
   try {
     const sent = JSON.stringify(S);
-    const r = await rpc('save_state', { p_code: cloud.code, p_data: S, p_version: cloud.version });
+    const r = await rpc('save_state', { p_group: cloud.group, p_code: cloud.code, p_data: S, p_version: cloud.version });
     if (r.error === 'conflict') {
       cloud.version = r.version;
       if (JSON.stringify(r.data) === sent) cloud.status = 'ok';   // our own earlier save; nothing lost
@@ -93,33 +93,50 @@ async function sync() {
 async function pull() {
   if (!cloud.on || !cloud.authed || cloud.admin) return;
   try {
-    const r = await rpc('get_state', { p_code: cloud.code });
+    const r = await rpc('get_state', { p_group: cloud.group, p_code: cloud.code });
     if (r.error) return doLogout();
     if (r.version !== cloud.version) { cloud.version = r.version; S = r.data; localSave(); render(); }
   } catch { }
 }
-async function doLogin(code, silent) {
+async function doLogin(group, code, silent) {
   cloud.err = '';
   try {
-    const r = await rpc('get_state', { p_code: code });
-    if (r.error) { cloud.authed = false; cloud.code = ''; lsSet('mf.code', ''); cloud.err = silent ? '' : 'That code is not right.'; return render(); }
-    cloud.code = code; lsSet('mf.code', code); cloud.authed = true; cloud.admin = !!r.admin; cloud.version = r.version;
-    const local = S;
-    if (cloud.admin && r.version === 0 && local.players.length) queueSync();   // first time: upload this phone's data
-    else { S = r.data; localSave(); }
+    const r = await rpc('get_state', { p_group: group, p_code: code });
+    if (r.error) { cloud.authed = false; cloud.group = group; cloud.code = ''; lsSet('mf.code', ''); cloud.err = silent ? '' : 'Group name or password is not right.'; return render(); }
+    cloud.group = group; cloud.code = code; lsSet('mf.group', group); lsSet('mf.code', code);
+    cloud.authed = true; cloud.admin = !!r.admin; cloud.version = r.version; cloud.name = r.name || group;
+    S = r.data; localSave();
     if (!cloud.admin && !cloud.poll) cloud.poll = setInterval(pull, 20000);
   } catch (e) { cloud.authed = false; cloud.err = "Can't reach the server. Check your connection and try again."; }
   render();
 }
+async function doCreate() {
+  const v = id => (document.getElementById(id)?.value || '').trim();
+  const name = v('gname'), admin = v('gadmin'), admin2 = v('gadmin2'), view = v('gview'), create = v('gcreate');
+  cloud.form = { name }; cloud.err = '';
+  if (name.length < 2) cloud.err = 'Group name must be at least 2 characters.';
+  else if (admin.length < 4 || view.length < 4) cloud.err = 'Passwords must be at least 4 characters.';
+  else if (admin !== admin2) cloud.err = 'The two admin passwords do not match.';
+  else if (admin === view) cloud.err = 'Admin and viewer passwords must be different.';
+  if (cloud.err) return render();
+  try {
+    const r = await rpc('create_group', { p_name: name, p_view_code: view, p_admin_code: admin, p_create_code: create });
+    if (r.error === 'exists') cloud.err = 'That group name is already taken.';
+    else if (r.error === 'forbidden') cloud.err = 'Wrong creation code.';
+    else if (r.error) cloud.err = 'Could not create the group. Check the name and passwords.';
+    else { cloud.mode = 'login'; return doLogin(name, admin, false); }
+  } catch (e) { cloud.err = "Can't reach the server. Check your connection and try again."; }
+  render();
+}
 function doLogout() {
   clearInterval(cloud.poll); cloud.poll = null; clearTimeout(cloud.timer);
-  cloud.authed = false; cloud.admin = false; cloud.code = ''; lsSet('mf.code', ''); S = { players: [], nights: [] };
+  cloud.authed = false; cloud.admin = false; cloud.code = ''; lsSet('mf.code', ''); cloud.name = ''; cloud.mode = 'login'; cloud.err = ''; S = { players: [], nights: [] };
   try { localStorage.removeItem(KEY); } catch { }
   ui.tab = 'night'; ui.draft = null; ui.matchId = null; ui.sheet = null; render();
 }
 function updateSub() {
   const el = document.getElementById('sub'); if (!el) return;
-  if (cloud.on && cloud.authed) el.textContent = RO() ? 'Viewing' : cloud.status === 'saving' ? 'Saving…' : cloud.status === 'error' ? '⚠ Not saved – retrying' : 'Saved ✓';
+  if (cloud.on && cloud.authed) el.textContent = (cloud.name ? cloud.name + ' · ' : '') + (RO() ? 'Viewing' : cloud.status === 'saving' ? 'Saving…' : cloud.status === 'error' ? '⚠ Not saved – retrying' : 'Saved ✓');
   else el.textContent = activeNight() ? 'Night in progress' : `${finishedNights().length} nights logged`;
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -270,10 +287,20 @@ try { ui.timer = JSON.parse(lsGet('mf.timer') || 'null'); } catch { }
 function render() {
   if (cloud.on && !cloud.authed) {
     document.getElementById('nav').innerHTML = ''; document.getElementById('ov').innerHTML = '';
-    document.getElementById('app').innerHTML = `<div class="card" style="margin-top:20px"><h2 style="margin-top:0">Enter group code</h2>
-      <p class="mute">Ask the group admin for the code. Use the admin code to edit, or the viewer code to look at stats.</p>
-      <div class="row"><input id="code" type="password" autocomplete="off" placeholder="Code" class="sp"><button class="pri" data-a="login">Open</button></div>
-      ${cloud.err ? `<p class="down">${esc(cloud.err)}</p>` : ''}</div>`;
+    const err = cloud.err ? `<p class="down">${esc(cloud.err)}</p>` : '';
+    document.getElementById('app').innerHTML = cloud.mode === 'create'
+      ? `<div class="card" style="margin-top:20px"><h2 style="margin-top:0">Create a group</h2>
+          <p class="mute">Pick a group name and two passwords: the admin password lets you edit, the viewer password is for friends who just look.</p>
+          <div class="grid"><input id="gname" placeholder="Group name" autocomplete="off" value="${esc(cloud.form.name || '')}">
+          <input id="gadmin" type="password" placeholder="Admin password (to edit)" autocomplete="new-password">
+          <input id="gadmin2" type="password" placeholder="Repeat admin password" autocomplete="new-password">
+          <input id="gview" type="password" placeholder="Viewer password (view only)" autocomplete="new-password">
+          <input id="gcreate" type="password" placeholder="Creation code (from the site owner)" autocomplete="off"></div>
+          ${err}<div class="row" style="margin-top:10px"><button data-a="showLogin">Back</button><span class="sp"></span><button class="pri" data-a="createGroup">Create group</button></div></div>`
+      : `<div class="card" style="margin-top:20px"><h2 style="margin-top:0">Sign in</h2>
+          <p class="mute">Enter your group name and its password. Use the admin password to edit, or the viewer password to just look.</p>
+          <div class="grid"><input id="grp" placeholder="Group name" autocomplete="off" value="${esc(cloud.group || '')}"><input id="code" type="password" placeholder="Password" autocomplete="current-password"></div>
+          ${err}<div class="row" style="margin-top:10px"><button data-a="showCreate">Create a new group</button><span class="sp"></span><button class="pri" data-a="login">Open</button></div></div>`;
     return updateSub();
   }
   const nav = RO() ? [['night', '⚽ Tonight'], ['stats', '📊 Stats'], ['data', '👤 Account']] : [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['settings', '⚙️ Settings'], ['data', '💾 Data']];
@@ -448,7 +475,7 @@ function viewSettings() {
 
 /* ---------- Data tab ---------- */
 function viewData() {
-  const acct = cloud.on ? `<div class="card"><b>Group access</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p><button data-a="logout">Sign out</button></div>` : '';
+  const acct = cloud.on ? `<div class="card"><b>Group: ${esc(cloud.name)}</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p><button data-a="logout">Sign out</button></div>` : '';
   if (RO()) return acct;
   return acct + `<div class="card"><b>Backup</b><p class="mute">${cloud.on ? 'Data is stored in the shared database. A backup file is still a good safety copy.' : 'All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.'}</p>
     <div class="row"><button class="pri" data-a="export">Export backup</button><button data-a="importPick">Import backup</button></div>
@@ -497,7 +524,10 @@ function sheetHtml() {
 
 /* ---------- actions ---------- */
 const A = {
-  login: () => { doLogin(document.getElementById('code').value.trim(), false); },
+  login: () => { doLogin(document.getElementById('grp').value.trim(), document.getElementById('code').value.trim(), false); },
+  showCreate: () => { cloud.mode = 'create'; cloud.err = ''; },
+  showLogin: () => { cloud.mode = 'login'; cloud.err = ''; },
+  createGroup: () => { doCreate(); },
   logout: () => { if (confirm('Sign out on this device?')) doLogout(); },
   tab: d => { ui.tab = d.k; ui.sheet = null; },
   view: d => { ui.view = d.k; },
@@ -638,7 +668,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-stop]') && !e.target.closest('[data-a]')) return;
   const t = e.target.closest('[data-a]'); if (!t) return;
   const f = A[t.dataset.a]; if (!f) return;
-  if (cloud.on && (!cloud.authed || RO()) && !['tab', 'view', 'sort', 'player', 'closeSheet', 'login', 'logout'].includes(t.dataset.a)) return;
+  if (cloud.on && (!cloud.authed || RO()) && !['tab', 'view', 'sort', 'player', 'closeSheet', 'login', 'logout', 'showCreate', 'showLogin', 'createGroup'].includes(t.dataset.a)) return;
   f(t.dataset); render();
 });
 document.addEventListener('change', e => {
@@ -669,8 +699,8 @@ document.addEventListener('change', e => {
   render();
 });
 
-if (cloud.on) { render(); doLogin(cloud.code, true); } else render();
-document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'code') A.login(); });
+if (cloud.on) { render(); if (cloud.group) doLogin(cloud.group, cloud.code, true); } else render();
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.target.id === 'code' || e.target.id === 'grp')) A.login(); });
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
