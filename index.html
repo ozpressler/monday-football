@@ -431,12 +431,18 @@ function viewSetup() {
     ${absentRows || (all.length ? '<div class="mute" style="padding:6px 0">Everyone is here 🎉</div>' : '<div class="empty">No players yet. Add them below or in the Players tab.</div>')}
     <div class="row" style="margin-top:10px"><input id="quick" placeholder="New player name" class="sp"><button data-a="quickAdd">Add</button></div></div>`;
 
+  const per = cfg().perSide, need = d.k * per, diff = present.length - need, exact = diff === 0;
+  const placedAll = present.every(p => d.assign[p.id] != null);
+  const sizesOk = Array.from({ length: d.k }, (_, i) => present.filter(p => d.assign[p.id] === i).length === per).every(Boolean);
+  const ready = exact && placedAll && sizesOk;
+  const msg = !exact ? `${present.length} here. You need exactly ${need} (${d.k} teams of ${per}): ${diff > 0 ? `untick ${diff}` : `add ${-diff} more`}.`
+    : !ready ? `${present.length} here. Put exactly ${per} players on each team, or tap Auto-balance.` : `${present.length} here · ${d.k} teams of ${per} ✓`;
   return `<div class="row"><h2 class="sp">${d.edit ? 'Edit teams' : 'Set up tonight'}</h2><button class="sm" data-a="cancelDraft">Cancel</button></div>
     <div class="card"><div class="row"><span>Date</span><input type="date" value="${d.date}" data-c="ddate"><span class="sp"></span><span>Teams</span>
       <select data-c="dk">${[2, 3, 4].map(k => `<option ${k === d.k ? 'selected' : ''}>${k}</option>`).join('')}</select></div></div>
-    <div class="mute" style="margin:-4px 0 10px">${present.length} here · ${d.k} teams of ${cfg().perSide} = ${d.k * cfg().perSide} ${present.length === d.k * cfg().perSide ? '✓' : present.length > d.k * cfg().perSide ? `(${present.length - d.k * cfg().perSide} extra)` : `(${d.k * cfg().perSide - present.length} short)`}</div>
-    <div class="row" style="margin-bottom:10px"><button data-a="autoBalance" ${present.length >= d.k ? '' : 'disabled'}>🎲 Auto-balance (${present.length} here)</button><span class="sp"></span>
-      <button class="pri" data-a="beginNight">${d.edit ? 'Save teams' : 'Start night'}</button></div>
+    <div class="${ready ? 'mute' : ''}" style="margin:-4px 0 10px;${ready ? '' : 'color:var(--warn)'}">${msg}</div>
+    <div class="row" style="margin-bottom:10px"><button data-a="autoBalance" ${exact ? '' : 'disabled'}>🎲 Auto-balance</button><span class="sp"></span>
+      <button class="pri" data-a="beginNight" ${ready ? '' : 'disabled'}>${d.edit ? 'Save teams' : 'Start night'}</button></div>
     ${teamSecs}${unSec}${absSec}`;
 }
 
@@ -560,11 +566,15 @@ const A = {
   quickAdd: () => { const el = document.getElementById('quick'); const nm = el.value.trim(); if (!nm) return; const p = newPlayer(nm); ui.draft.att[p.id] = true; save(); },
   autoBalance: () => {
     const d = ui.draft, ids = activePlayers().filter(p => d.att[p.id]).map(p => p.id);
+    if (ids.length !== d.k * cfg().perSide) return alert(`You need exactly ${d.k * cfg().perSide} players (${d.k} teams of ${cfg().perSide}).`);
     const teams = balance(ids, d.k);
     d.assign = {}; teams.forEach((t, i) => t.forEach(id => d.assign[id] = i));
   },
   beginNight: () => {
     const d = ui.draft, ids = activePlayers().filter(p => d.att[p.id]).map(p => p.id);
+    const per = cfg().perSide;
+    if (ids.length !== d.k * per) return alert(`You need exactly ${d.k * per} players (${d.k} teams of ${per}) to start.`);
+    if (Array.from({ length: d.k }, (_, i) => ids.filter(id => d.assign[id] === i).length).some(n => n !== per && n !== 0)) return alert(`Each team needs exactly ${per} players.`);
     if (ids.some(id => d.assign[id] == null)) return alert('Some players are not on a team yet. Tap a colour for each player, or use Auto-balance.');
     const teams = Array.from({ length: d.k }, (_, i) => ({ id: uid(), name: COLORS[i].n, color: COLORS[i].c, playerIds: ids.filter(id => d.assign[id] === i) })).filter(t => t.playerIds.length);
     if (teams.length < 2) return alert('You need at least two teams with players.');
