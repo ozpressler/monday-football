@@ -303,7 +303,7 @@ function render() {
           ${err}<div class="row" style="margin-top:10px"><button data-a="showCreate">Create a new group</button><span class="sp"></span><button class="pri" data-a="login">Open</button></div></div>`;
     return updateSub();
   }
-  const nav = RO() ? [['night', '⚽ Tonight'], ['stats', '📊 Stats'], ['data', '👤 Account']] : [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['settings', '⚙️ Settings'], ['data', '💾 Data']];
+  const nav = RO() ? [['night', '⚽ Tonight'], ['stats', '📊 Stats'], ['data', '👤 Account']] : [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['data', '💾 Data'], ['settings', '⚙️ Settings']];
   document.getElementById('nav').innerHTML = nav.map(([k, l]) => `<button class="${ui.tab === k ? 'on' : ''}" data-a="tab" data-k="${k}">${l}</button>`).join('');
   const v = { night: viewNight, stats: viewStats, players: viewPlayers, settings: viewSettings, data: viewData }[ui.tab]();
   document.getElementById('app').innerHTML = v;
