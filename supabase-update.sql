@@ -1,26 +1,3 @@
-create table if not exists public.app_groups (
-  name         text primary key,
-  display_name text not null,
-  data         jsonb not null default '{"players":[],"nights":[]}',
-  version      int not null default 0,
-  view_code    text not null,
-  admin_code   text not null,
-  public_view  boolean not null default false,
-  created_at   timestamptz not null default now(),
-  updated_at   timestamptz not null default now()
-);
-
-create table if not exists public.app_config (
-  key   text primary key,
-  value text not null
-);
-
-insert into public.app_config (key, value) values ('create_code', 'CHANGE-ME-CREATE-CODE')
-on conflict (key) do nothing;
-
-alter table public.app_groups enable row level security;
-alter table public.app_config enable row level security;
-
 create table if not exists public.app_backups (
   id         bigint generated always as identity primary key,
   grp        text not null,

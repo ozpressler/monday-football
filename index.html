@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Monday Night Football</title>
 <style>
 :root{--bg:#f4f6f5;--card:#fff;--ink:#16211b;--mute:#6b7a72;--line:#e2e8e4;--accent:#0f7b3f;--accent-ink:#fff;--warn:#c2410c;--soft:#e8f3ec}
@@ -73,7 +74,7 @@ async function rpc(fn, args) {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
-function queueSync() { cloud.dirty = true; cloud.status = 'saving'; clearTimeout(cloud.timer); cloud.timer = setTimeout(sync, 500); updateSub(); }
+function queueSync() { lsSet('mf.dirty', '1'); cloud.dirty = true; cloud.status = 'saving'; clearTimeout(cloud.timer); cloud.timer = setTimeout(sync, 500); updateSub(); }
 async function sync() {
   if (cloud.syncing) { clearTimeout(cloud.timer); cloud.timer = setTimeout(sync, 500); return; }
   cloud.syncing = true; cloud.dirty = false;
@@ -81,11 +82,11 @@ async function sync() {
     const sent = JSON.stringify(S);
     const r = await rpc('save_state', { p_group: cloud.group, p_code: cloud.code, p_data: S, p_version: cloud.version });
     if (r.error === 'conflict') {
-      cloud.version = r.version;
-      if (JSON.stringify(r.data) === sent) cloud.status = 'ok';   // our own earlier save; nothing lost
-      else { S = r.data; localSave(); cloud.status = 'ok'; ui.matchId = null; ui.draft = null; render(); alert('Another device saved newer data, so the latest version was loaded. Please redo your last change.'); }
+      cloud.version = r.version; lsSet('mf.version', String(r.version));
+      if (JSON.stringify(r.data) === sent) { cloud.status = 'ok'; if (!cloud.dirty) lsSet('mf.dirty', ''); }   // our own earlier save; nothing lost
+      else { S = r.data; localSave(); lsSet('mf.dirty', ''); cloud.status = 'ok'; ui.matchId = null; ui.draft = null; render(); alert('Another device saved newer data, so the latest version was loaded. Please redo your last change.'); }
     } else if (r.error) { cloud.status = 'error'; cloud.err = r.error; }
-    else { cloud.version = r.version; cloud.status = cloud.dirty ? 'saving' : 'ok'; }
+    else { cloud.version = r.version; lsSet('mf.version', String(r.version)); if (!cloud.dirty) lsSet('mf.dirty', ''); cloud.status = cloud.dirty ? 'saving' : 'ok'; }
   } catch (e) {
     cloud.status = 'error'; cloud.dirty = true; clearTimeout(cloud.timer); cloud.timer = setTimeout(sync, 8000);
   }
@@ -95,20 +96,29 @@ async function pull() {
   if (!cloud.on || !cloud.authed || cloud.admin) return;
   try {
     const r = await rpc('get_state', { p_group: cloud.group, p_code: cloud.code });
+    if (r.error === 'locked') return;
     if (r.error) return doLogout();
-    if (r.version !== cloud.version) { cloud.version = r.version; S = r.data; localSave(); render(); }
+    if (r.version !== cloud.version) { cloud.version = r.version; lsSet('mf.version', String(r.version)); S = r.data; localSave(); render(); }
   } catch { }
 }
 async function doLogin(group, code, silent) {
   cloud.err = '';
   try {
     const r = await rpc('get_state', { p_group: group, p_code: code });
+    if (r.error === 'locked') { cloud.authed = false; cloud.group = group; cloud.err = 'Too many wrong attempts. Try again in a few minutes.'; return render(); }
     if (r.error) { cloud.authed = false; cloud.group = group; cloud.code = ''; lsSet('mf.code', ''); cloud.err = silent ? '' : 'Group name or password is not right.'; return render(); }
     cloud.group = group; cloud.code = code; lsSet('mf.group', group); lsSet('mf.code', code);
     cloud.authed = true; cloud.admin = !!r.admin; cloud.version = r.version; cloud.name = r.name || group;
+    lsSet('mf.admin', cloud.admin ? '1' : ''); lsSet('mf.name', cloud.name); lsSet('mf.version', String(cloud.version)); lsSet('mf.dirty', '');
     S = r.data; localSave();
     if (!cloud.admin && !cloud.poll) cloud.poll = setInterval(pull, 20000);
-  } catch (e) { cloud.authed = false; cloud.err = "Can't reach the server. Check your connection and try again."; }
+  } catch (e) {
+    if (silent && lsGet('mf.name') && lsGet('mf.group') === group) {   // no connection at start-up: open with the saved copy
+      cloud.authed = true; cloud.code = code; cloud.admin = lsGet('mf.admin') === '1'; cloud.name = lsGet('mf.name'); cloud.version = +lsGet('mf.version') || 0; cloud.status = 'offline';
+      if (cloud.admin) { if (lsGet('mf.dirty')) queueSync(); }
+      else if (!cloud.poll) cloud.poll = setInterval(pull, 20000);
+    } else { cloud.authed = false; cloud.err = "Can't reach the server. Check your connection and try again."; }
+  }
   render();
 }
 async function doCreate() {
@@ -124,9 +134,45 @@ async function doCreate() {
     const r = await rpc('create_group', { p_name: name, p_view_code: view, p_admin_code: admin, p_create_code: create });
     if (r.error === 'exists') cloud.err = 'That group name is already taken.';
     else if (r.error === 'forbidden') cloud.err = 'Wrong creation code.';
+    else if (r.error === 'locked') cloud.err = 'Too many wrong creation codes. Try again in a few minutes.';
     else if (r.error) cloud.err = 'Could not create the group. Check the name and passwords.';
     else { cloud.mode = 'login'; return doLogin(name, admin, false); }
   } catch (e) { cloud.err = "Can't reach the server. Check your connection and try again."; }
+  render();
+}
+function backupNow(label) {
+  if (!cloud.on || !cloud.admin || !cloud.authed) return;
+  rpc('save_backup', { p_group: cloud.group, p_code: cloud.code, p_label: label, p_data: S }).catch(() => { });
+}
+async function loadBackups() {
+  if (!cloud.on || !cloud.admin || !cloud.authed) return;
+  try { const r = await rpc('list_backups', { p_group: cloud.group, p_code: cloud.code }); ui.backups = r.items || []; }
+  catch (e) { ui.backups = String(e.message).includes('404') ? 'na' : (ui.backups || []); }
+  render();
+}
+async function doRestore(id) {
+  if (!confirm('Restore this backup?\n\nCurrent data will be replaced (a backup of it is saved first).')) return;
+  try {
+    const r = await rpc('get_backup', { p_group: cloud.group, p_code: cloud.code, p_id: +id });
+    if (!r.data) return alert('Could not load that backup.');
+    backupNow('Before restoring a backup');
+    S = r.data; ui.matchId = null; ui.draft = null; save(); alert('Backup restored.'); setTimeout(loadBackups, 800);
+  } catch (e) { alert("Can't reach the server. Check your connection and try again."); }
+  render();
+}
+async function doChangeCodes() {
+  const v = id => (document.getElementById(id)?.value || '').trim(), nv = v('newview'), na = v('newadmin');
+  if (!nv && !na) return alert('Type a new viewer and/or admin password first.');
+  if ((nv && nv.length < 4) || (na && na.length < 4)) return alert('Passwords must be at least 4 characters.');
+  if (!confirm('Change the password(s)?\n\nPeople signed in with the old viewer password will need the new one.')) return;
+  try {
+    const r = await rpc('change_codes', { p_group: cloud.group, p_code: cloud.code, p_new_view: nv, p_new_admin: na });
+    if (r.error === 'same') alert('The viewer and admin passwords must be different.');
+    else if (r.error) alert('Could not change the passwords.');
+    else { if (na) { cloud.code = na; lsSet('mf.code', na); } alert('Passwords changed.'); }
+  } catch (e) {
+    alert(String(e.message).includes('404') ? 'The database needs updating first. Run supabase-update.sql in Supabase.' : "Can't reach the server. Check your connection and try again.");
+  }
   render();
 }
 async function doRename() {
@@ -146,13 +192,13 @@ async function doRename() {
 }
 function doLogout() {
   clearInterval(cloud.poll); cloud.poll = null; clearTimeout(cloud.timer);
-  cloud.authed = false; cloud.admin = false; cloud.code = ''; lsSet('mf.code', ''); cloud.name = ''; cloud.mode = 'login'; cloud.err = ''; S = { players: [], nights: [] };
+  cloud.authed = false; cloud.admin = false; cloud.code = ''; lsSet('mf.code', ''); cloud.name = ''; cloud.mode = 'login'; cloud.err = ''; ['mf.admin', 'mf.name', 'mf.version', 'mf.dirty'].forEach(k => lsSet(k, '')); S = { players: [], nights: [] };
   try { localStorage.removeItem(KEY); } catch { }
   ui.tab = 'night'; ui.draft = null; ui.matchId = null; ui.sheet = null; render();
 }
 function updateSub() {
   const el = document.getElementById('sub'); if (!el) return;
-  if (cloud.on && cloud.authed) el.textContent = (cloud.name ? cloud.name + ' · ' : '') + (RO() ? 'Viewing' : cloud.status === 'saving' ? 'Saving…' : cloud.status === 'error' ? '⚠ Not saved – retrying' : 'Saved ✓');
+  if (cloud.on && cloud.authed) el.textContent = (cloud.name ? cloud.name + ' · ' : '') + (RO() ? 'Viewing' : cloud.status === 'offline' ? 'Offline' : cloud.status === 'saving' ? 'Saving…' : cloud.status === 'error' ? '⚠ Not saved – retrying' : 'Saved ✓');
   else el.textContent = activeNight() ? 'Night in progress' : `${finishedNights().length} nights logged`;
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -299,7 +345,7 @@ function curMinute(m) {
 const goalsSorted = m => m.goals.map((g, i) => [g, i]).sort((a, b) => (a[0].min ?? 9999) - (b[0].min ?? 9999) || a[1] - b[1]).map(x => x[0]);
 
 /* ---------- UI state ---------- */
-const ui = { range: 'all', installEvt: null, timer: null, tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
+const ui = { backups: null, range: 'all', installEvt: null, timer: null, tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
 
 try { ui.timer = JSON.parse(lsGet('mf.timer') || 'null'); } catch { }
 const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone;
@@ -648,14 +694,23 @@ function viewSettings() {
       ${chk('allowSubs', 'Allow substitutes (bench)', 'Off: you need exactly teams × players per team. On: extra players wait on a bench and can be swapped in during a game.')}
       <p class="mute" style="margin-bottom:0">Format: ${Array(c.teams).fill(c.perSide).join(' vs ')} · used as the default when setting up a night</p></div>
     <div class="card"><button data-a="resetSettings">Reset settings to defaults</button></div>
-    ${acctCard()}
+    ${backupsCard()}${acctCard()}
     <div class="card"><b>How grades work</b><p class="mute">Each player's grade (1–10) blends their win rate, goals + assists per game, and the goal difference of their teams, using recent nights more than old ones. New players lean on their starting grade until they have enough games. Grades update when you finish a night.</p></div>
     <div class="card"><b>Test data</b><p class="mute">Demo data is for trying the app out. Use "Delete all data" to clear it before your real games.</p><div class="row"><button data-a="demo">Load demo data</button><button class="danger" data-a="wipe">Delete all data</button></div></div>`;
 }
 
 /* ---------- Data tab ---------- */
+const backupsCard = () => {
+  if (!cloud.on || RO()) return '';
+  const b = ui.backups;
+  const rows = Array.isArray(b)
+    ? (b.length ? b.map(x => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><div class="sp"><div>${esc(new Date(x.created_at).toLocaleString())}</div><div class="mute">${esc(x.label || 'Backup')} · ${x.players} players, ${x.nights} nights</div></div><button class="sm" data-a="restoreBackup" data-id="${x.id}">Restore</button></div>`).join('') : '<div class="mute">No backups yet.</div>')
+    : b === 'na' ? '<div class="mute">Backups need the latest database update (run supabase-update.sql in Supabase).</div>' : '<div class="mute">Loading…</div>';
+  return `<div class="card"><b>Automatic backups</b><p class="mute">A copy is saved after every finished night and before anything is deleted. The latest 25 are kept.</p><button data-a="backupNowBtn" style="margin-bottom:8px">Back up now</button>${rows}</div>`;
+};
 const acctCard = () => cloud.on ? `<div class="card"><b>Group: ${esc(cloud.name)}</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p>
-  ${RO() ? '' : `<div class="row" style="margin-bottom:10px"><input id="newgname" value="${esc(cloud.name)}" class="sp" placeholder="Group name" autocomplete="off"><button data-a="renameGroup">Rename</button></div>`}<button data-a="logout">Sign out</button></div>` : '';
+  ${RO() ? '' : `<div class="row" style="margin-bottom:10px"><input id="newgname" value="${esc(cloud.name)}" class="sp" placeholder="Group name" autocomplete="off"><button data-a="renameGroup">Rename</button></div>
+  <details style="margin-bottom:10px"><summary class="mute" style="cursor:pointer">Change passwords</summary><div class="grid" style="margin-top:8px"><input id="newview" type="password" placeholder="New viewer password (empty = keep)" autocomplete="new-password"><input id="newadmin" type="password" placeholder="New admin password (empty = keep)" autocomplete="new-password"><button data-a="changeCodes">Change passwords</button></div></details>`}<button data-a="logout">Sign out</button></div>` : '';
 function viewData() {
   if (RO()) return acctCard();
   return `<div class="card"><b>Backup</b><p class="mute">${cloud.on ? 'Data is stored in the shared database. A backup file is still a good safety copy.' : 'All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.'}</p>
@@ -724,7 +779,10 @@ const A = {
   showLogin: () => { cloud.mode = 'login'; cloud.err = ''; },
   createGroup: () => { doCreate(); },
   logout: () => { if (confirm('Sign out on this device?')) doLogout(); },
-  tab: d => { ui.tab = d.k; ui.sheet = null; },
+  tab: d => { ui.tab = d.k; ui.sheet = null; if (d.k === 'settings') loadBackups(); },
+  backupNowBtn: () => { backupNow('Manual backup'); setTimeout(loadBackups, 900); },
+  restoreBackup: d => { doRestore(d.id); },
+  changeCodes: () => { doChangeCodes(); },
   view: d => { ui.view = d.k; },
   closeSheet: () => { ui.sheet = null; },
   sort: d => { ui.sort = ui.sort.k === d.k ? { k: d.k, d: -ui.sort.d } : { k: d.k, d: d.k === 'name' ? 1 : -1 }; },
@@ -820,11 +878,11 @@ const A = {
     g.min = null; m.saved = false; ui.sheet = null; save();
   },
   delGoal: d => { const m = activeNight().matches.find(x => x.id === ui.matchId); m.goals = m.goals.filter(g => g.id !== d.id); m.saved = false; save(); },
-  discardNight: () => { if (!confirm('Discard tonight completely? All games will be lost.')) return; S.nights = S.nights.filter(n => n.finished); ui.matchId = null; save(); },
+  discardNight: () => { if (!confirm('Discard tonight completely? All games will be lost.')) return; backupNow('Before discarding a night'); S.nights = S.nights.filter(n => n.finished); ui.matchId = null; save(); },
   finishNight: () => {
     const n = activeNight();
     if (!confirm(`Finish the night (${n.matches.length} games) and update grades?`)) return;
-    const before = grades(); n.finished = true; n.matches.forEach(m => m.saved = true); save(); const after = grades();
+    const before = grades(); n.finished = true; n.matches.forEach(m => m.saved = true); save(); backupNow(`After night ${n.date}`); const after = grades();
     const changes = S.players.filter(p => n.teams.some(t => t.playerIds.includes(p.id)))
       .map(p => ({ name: p.name, from: before[p.id].grade, to: after[p.id].grade })).sort((a, b) => (b.to - b.from) - (a.to - a.from));
     ui.sheet = { type: 'finish', changes, nid: n.id }; ui.matchId = null;
@@ -838,7 +896,8 @@ const A = {
   deletePlayer: d => {
     const p = P(d.p); if (!p) return;
     const games = analyze(finishedNights())[p.id].gp;
-    if (!confirm(`Permanently delete ${p.name}?\n\nTheir name, grade and stats are removed (${games} game${games === 1 ? '' : 's'} played). Game scores stay the same, but their goals and assists show as "unknown". This cannot be undone.\n\nTip: "Retire" hides a player but keeps their history.`)) return;
+    if (!confirm(`Permanently delete ${p.name}?\n\nTheir name, grade and stats are removed (${games} game${games === 1 ? '' : 's'} played). Game scores stay the same, but their goals and assists show as "unknown". You can restore a backup afterwards.\n\nTip: "Retire" hides a player but keeps their history.`)) return;
+    backupNow(`Before deleting ${p.name}`);
     S.players = S.players.filter(x => x.id !== p.id);
     S.nights.forEach(n => {
       n.teams.forEach(t => t.playerIds = t.playerIds.filter(id => id !== p.id));
@@ -854,8 +913,8 @@ const A = {
     const a = document.createElement('a'); a.href = url; a.download = `monday-night-football-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   importPick: () => document.getElementById('file').click(),
-  demo: () => { if (!confirm('This REPLACES all current data with demo data (20 players, 6 nights). Continue?')) return; S = { ...makeDemo(), settings: S.settings }; ui.tab = 'stats'; save(); },
-  wipe: () => { if (confirm('Delete ALL players and games? This cannot be undone.') && confirm('Really delete everything?')) { S = { players: [], nights: [], settings: S.settings }; save(); } },
+  demo: () => { if (!confirm('This REPLACES all current data with demo data (20 players, 6 nights). Continue?')) return; backupNow('Before loading demo data'); S = { ...makeDemo(), settings: S.settings }; ui.tab = 'stats'; save(); },
+  wipe: () => { if (confirm('Delete ALL players and games?') && confirm('Really delete everything? (A backup is saved first when you are online.)')) { backupNow('Before deleting all data'); S = { players: [], nights: [], settings: S.settings }; save(); } },
 };
 function makeDemo() {
   const names = ['Alex', 'Ben', 'Chris', 'Dan', 'Eli', 'Fabio', 'Gil', 'Hugo', 'Ivan', 'Jack', 'Kai', 'Leo', 'Marco', 'Nico', 'Omar', 'Pablo', 'Quinn', 'Raul', 'Sam', 'Tom'];
@@ -900,7 +959,7 @@ document.addEventListener('change', e => {
     if (t.id === 'file' && t.files[0]) {
       t.files[0].text().then(txt => {
         try { const j = JSON.parse(txt); if (!Array.isArray(j.players) || !Array.isArray(j.nights)) throw 0;
-          if (confirm('Replace current data with this backup?')) { S = j; save(); render(); } } catch { alert('That file is not a valid backup.'); }
+          if (confirm('Replace current data with this backup?')) { backupNow('Before importing a file'); S = j; save(); render(); } } catch { alert('That file is not a valid backup.'); }
       });
     } return;
   }
