@@ -470,18 +470,19 @@ function viewSettings() {
       ${chk('extraTied', 'Offer extra time when tied', 'Shown at full time if the score is level')}${chk('sound', 'Sound & vibration at full time')}</div>
     <div class="card"><b>Teams</b>${num('teams', 'Number of teams', 2, 4)}${num('perSide', 'Players per team', 2, 11, 'For example 5 means 5 vs 5')}
       <p class="mute" style="margin-bottom:0">Format: ${Array(c.teams).fill(c.perSide).join(' vs ')} · used as the default when setting up a night</p></div>
-    <div class="card"><button data-a="resetSettings">Reset to defaults</button></div>`;
+    <div class="card"><button data-a="resetSettings">Reset settings to defaults</button></div>
+    ${acctCard()}
+    <div class="card"><b>How grades work</b><p class="mute">Each player's grade (1–10) blends their win rate, goals + assists per game, and the goal difference of their teams, using recent nights more than old ones. New players lean on their starting grade until they have enough games. Grades update when you finish a night.</p></div>
+    <div class="card"><b>Test data</b><p class="mute">Demo data is for trying the app out. Use "Delete all data" to clear it before your real games.</p><div class="row"><button data-a="demo">Load demo data</button><button class="danger" data-a="wipe">Delete all data</button></div></div>`;
 }
 
 /* ---------- Data tab ---------- */
+const acctCard = () => cloud.on ? `<div class="card"><b>Group: ${esc(cloud.name)}</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p><button data-a="logout">Sign out</button></div>` : '';
 function viewData() {
-  const acct = cloud.on ? `<div class="card"><b>Group: ${esc(cloud.name)}</b><p class="mute">${RO() ? 'You are signed in as a viewer.' : 'You are signed in as admin. Changes save to the shared database automatically.'}</p><button data-a="logout">Sign out</button></div>` : '';
-  if (RO()) return acct;
-  return acct + `<div class="card"><b>Backup</b><p class="mute">${cloud.on ? 'Data is stored in the shared database. A backup file is still a good safety copy.' : 'All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.'}</p>
+  if (RO()) return acctCard();
+  return `<div class="card"><b>Backup</b><p class="mute">${cloud.on ? 'Data is stored in the shared database. A backup file is still a good safety copy.' : 'All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.'}</p>
     <div class="row"><button class="pri" data-a="export">Export backup</button><button data-a="importPick">Import backup</button></div>
-    <input type="file" id="file" accept="application/json" hidden></div>
-  <div class="card"><b>How grades work</b><p class="mute">Each player's grade (1–10) blends their win rate, goals + assists per game, and the goal difference of their teams, using recent nights more than old ones. New players lean on their starting grade until they have enough games. Grades update when you finish a night.</p></div>
-  <div class="card"><div class="row"><button data-a="demo">Load demo data</button><button class="danger" data-a="wipe">Delete all data</button></div><p class="mute">Demo data is for testing. Use "Delete all data" to clear it before your real games.</p></div>`;
+    <input type="file" id="file" accept="application/json" hidden></div>`;
 }
 
 /* ---------- sheets ---------- */
