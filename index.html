@@ -373,7 +373,7 @@ function viewPlayers() {
       <div class="row" style="margin-top:8px;flex-wrap:wrap"><label class="mute" style="cursor:pointer"><input type="checkbox" ${p.regular ? 'checked' : ''} data-c="preg" data-p="${p.id}"> ⭐ Regular</label>
       <label class="mute">Start <input type="number" step="0.5" min="1" max="10" value="${p.seed ?? 5}" data-c="pseed" data-p="${p.id}"></label>
       <label class="mute">Adjust <input type="number" step="0.5" min="-3" max="3" value="${p.adj || 0}" data-c="padj" data-p="${p.id}"></label>
-      <span class="sp"></span><button class="sm" data-a="toggleActive" data-p="${p.id}">${p.inactive ? 'Restore' : 'Retire'}</button></div></div>`).join('') || '<div class="empty">Add your first players above</div>'}`;
+      <span class="sp"></span><button class="sm" data-a="toggleActive" data-p="${p.id}">${p.inactive ? 'Restore' : 'Retire'}</button><button class="sm danger" data-a="deletePlayer" data-p="${p.id}">Delete</button></div></div>`).join('') || '<div class="empty">Add your first players above</div>'}`;
 }
 
 /* ---------- Data tab ---------- */
@@ -483,6 +483,18 @@ const A = {
   },
   addPlayer: () => { const el = document.getElementById('newName'); if (el.value.trim()) { newPlayer(el.value.trim()); save(); } },
   bulkAdd: () => { document.getElementById('bulk').value.split(/[\n,]/).map(s => s.trim()).filter(Boolean).forEach(newPlayer); save(); },
+  deletePlayer: d => {
+    const p = P(d.p); if (!p) return;
+    const games = analyze(finishedNights())[p.id].gp;
+    if (!confirm(`Permanently delete ${p.name}?\n\nTheir name, grade and stats are removed (${games} game${games === 1 ? '' : 's'} played). Game scores stay the same, but their goals and assists show as "unknown". This cannot be undone.\n\nTip: "Retire" hides a player but keeps their history.`)) return;
+    S.players = S.players.filter(x => x.id !== p.id);
+    S.nights.forEach(n => {
+      n.teams.forEach(t => t.playerIds = t.playerIds.filter(id => id !== p.id));
+      n.matches.forEach(m => m.goals.forEach(g => { if (g.scorer === p.id) g.scorer = null; if (g.assist === p.id) g.assist = null; }));
+    });
+    if (ui.draft) { delete ui.draft.att[p.id]; delete ui.draft.assign[p.id]; }
+    ui.sheet = null; save();
+  },
   toggleActive: d => { const p = P(d.p); p.inactive = !p.inactive; save(); },
   export: () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
