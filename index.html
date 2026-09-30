@@ -42,6 +42,7 @@ tr.clk{cursor:pointer}
 .sheet{background:var(--card);width:100%;max-width:720px;max-height:85vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
 .up{color:var(--accent)}.down{color:var(--warn)}
 .clock{font-size:60px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;letter-spacing:2px;line-height:1.1}.clock.low{color:var(--warn)}
+.toast{position:fixed;left:12px;right:12px;bottom:calc(70px + env(safe-area-inset-bottom));max-width:696px;margin:0 auto;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:center;z-index:8}.toast button{background:var(--bg);color:var(--ink)}
 .empty{text-align:center;color:var(--mute);padding:30px 10px}
 </style>
 </head>
@@ -167,6 +168,8 @@ const activeNight = () => S.nights.find(n => !n.finished);
 const finishedNights = () => S.nights.filter(n => n.finished).sort((a, b) => (a.date + a.created).localeCompare(b.date + b.created));
 const teamOf = (n, id) => n.teams.find(t => t.id === id);
 const score = (m, tid) => m.goals.filter(g => g.teamId === tid).length;
+const squadOf = (n, m, tid) => (m.squads && m.squads[tid]) || (teamOf(n, tid) ? teamOf(n, tid).playerIds : []);
+const playedBy = (n, m, tid) => [...new Set([...squadOf(n, m, tid), ...(m.subs || []).filter(x => x.t === tid).flatMap(x => [x.out, x.in])])];
 
 /* ---------- analysis: stats + grades ---------- */
 function analyze(nights) {
@@ -179,7 +182,7 @@ function analyze(nights) {
       const ta = teamOf(n, m.a), tb = teamOf(n, m.b);
       if (!ta || !tb) return;
       const sa = score(m, m.a), sb = score(m, m.b);
-      [[ta, sa, sb], [tb, sb, sa]].forEach(([t, f, c]) => t.playerIds.forEach(pid => {
+      [[ta, sa, sb], [tb, sb, sa]].forEach(([t, f, c]) => playedBy(n, m, t.id).forEach(pid => {
         const r = R[pid]; if (!r) return;
         r.gp++; r.gf += f; r.ga += c; seen.add(pid);
         if (f > c) r.w++; else if (f === c) r.d++; else r.l++;
@@ -245,7 +248,7 @@ function balance(ids, k) {
 }
 
 /* ---------- settings ---------- */
-const DEFAULTS = { matchMins: 8, extraMins: 2, extraTied: true, sound: true, teams: 3, perSide: 5 };
+const DEFAULTS = { matchMins: 8, extraMins: 2, extraTied: true, sound: true, teams: 3, perSide: 5, allowSubs: false };
 const cfg = () => ({ ...DEFAULTS, ...(S.settings || {}) });
 
 /* ---------- game timer (per device, not shared) ---------- */
@@ -322,7 +325,9 @@ function render() {
   document.getElementById('nav').innerHTML = nav.map(([k, l]) => `<button class="${ui.tab === k ? 'on' : ''}" data-a="tab" data-k="${k}">${l}</button>`).join('');
   const v = { night: viewNight, stats: viewStats, players: viewPlayers, settings: viewSettings, data: viewData }[ui.tab]();
   document.getElementById('app').innerHTML = v;
-  document.getElementById('ov').innerHTML = ui.sheet ? `<div class="overlay" data-a="closeSheet"><div class="sheet" data-stop>${sheetHtml()}</div></div>` : '';
+  if (!ui.matchId) ui.toast = null;
+  const toast = ui.toast ? `<div class="toast"><span class="sp">${esc(ui.toast.text)}</span><button class="sm" data-a="undoGoal">Undo</button></div>` : '';
+  document.getElementById('ov').innerHTML = (ui.sheet ? `<div class="overlay" data-a="closeSheet"><div class="sheet" data-stop>${sheetHtml()}</div></div>` : '') + toast;
   updateSub();
 }
 
@@ -338,6 +343,22 @@ function viewNightRO() {
   }).reverse().join('');
   return `<h2>Tonight · ${esc(n.date)}</h2>${ts}<h2>Games</h2>${ms || '<div class="empty">No games yet</div>'}<p class="mute">Updates automatically every few seconds.</p>`;
 }
+function suggestNext(n) {
+  const ts = n.teams; if (ts.length < 2) return null;
+  if (!n.matches.length) return { a: ts[0].id, b: ts[1].id, why: 'first game' };
+  const played = {}, last = {}; ts.forEach(t => { played[t.id] = 0; last[t.id] = -1; });
+  n.matches.forEach((m, i) => { if (played[m.a] != null) { played[m.a]++; last[m.a] = i; } if (played[m.b] != null) { played[m.b]++; last[m.b] = i; } });
+  const L = n.matches[n.matches.length - 1], nm = id => teamOf(n, id)?.name;
+  if (ts.length === 3 && teamOf(n, L.a) && teamOf(n, L.b)) {
+    const rest = ts.find(t => t.id !== L.a && t.id !== L.b).id, sa = score(L, L.a), sb = score(L, L.b);
+    let stay, why;
+    if (sa !== sb) { stay = sa > sb ? L.a : L.b; why = `${nm(stay)} won and stays on`; }
+    else { stay = played[L.a] !== played[L.b] ? (played[L.a] > played[L.b] ? L.b : L.a) : L.b; why = `draw, ${nm(stay)} stays on (fewer games)`; }
+    return { a: stay, b: rest, why };
+  }
+  const order = ts.slice().sort((x, y) => played[x.id] - played[y.id] || last[x.id] - last[y.id]);
+  return { a: order[0].id, b: order[1].id, why: 'the teams with the fewest games' };
+}
 function viewNight() {
   if (RO()) return viewNightRO();
   if (ui.draft) return viewSetup();
@@ -349,7 +370,10 @@ function viewNight() {
   if (ui.matchId) { const m = n.matches.find(x => x.id === ui.matchId); if (m) return viewMatch(n, m); ui.matchId = null; }
   const ts = n.teams.map(t => `<div class="card"><div class="row"><span class="dot" style="background:${t.color}"></span><b>${esc(t.name)}</b><span class="sp"></span><span class="mute">${t.playerIds.length} players</span></div>
     <div>${t.playerIds.map(id => `<span class="pill">${esc(P(id)?.name)}</span>`).join('')}</div></div>`).join('');
-  const a = ui.nm.a || n.teams[0].id, b = ui.nm.b || (n.teams[1] || n.teams[0]).id;
+  const sug = suggestNext(n), man = ui.nm.at === n.matches.length ? ui.nm : null;
+  const a = man ? man.a : sug.a, b = man ? man.b : sug.b;
+  const sugHint = sug ? `<div class="mute" style="margin-bottom:8px">Suggested: ${esc(teamOf(n, sug.a).name)} vs ${esc(teamOf(n, sug.b).name)} (${esc(sug.why)})</div>` : '';
+  const benchCard = (n.bench || []).length ? `<div class="card"><b>Bench</b> <span class="mute">(can be swapped in during a game)</span><div>${n.bench.map(id => `<span class="pill">${esc(P(id)?.name)}</span>`).join('')}</div></div>` : '';
   const opts = sel => n.teams.map(t => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
   const ms = n.matches.map((m, i) => {
     const ta = teamOf(n, m.a), tb = teamOf(n, m.b);
@@ -357,8 +381,8 @@ function viewNight() {
       <span class="dot" style="background:${ta.color}"></span><b>${esc(ta.name)} ${score(m, m.a)} – ${score(m, m.b)} ${esc(tb.name)}</b><span class="dot" style="background:${tb.color}"></span></div></div>`;
   }).reverse().join('');
   return `<div class="row"><h2 class="sp">Tonight · ${esc(n.date)}</h2><button class="sm" data-a="editTeams">Edit teams</button></div>${ts}
-    <h2>Games</h2>
-    <div class="card"><div class="row"><select id="nmA" data-c="nm">${opts(a)}</select><span>vs</span><select id="nmB" data-c="nm">${opts(b)}</select>
+    ${benchCard}<h2>Games</h2>
+    <div class="card">${sugHint}<div class="row"><select id="nmA" data-c="nm">${opts(a)}</select><span>vs</span><select id="nmB" data-c="nm">${opts(b)}</select>
       <span class="sp"></span><button class="pri" data-a="newMatch">Start game</button></div></div>
     ${ms || '<div class="empty">No games yet</div>'}
     <div class="row" style="margin-top:16px"><button class="danger" data-a="discardNight">Discard night</button><span class="sp"></span>
@@ -368,8 +392,9 @@ function viewNight() {
 function viewMatch(n, m) {
   const ta = teamOf(n, m.a), tb = teamOf(n, m.b);
   const col = (t) => `<div><div class="row" style="margin-bottom:8px"><span class="dot" style="background:${t.color}"></span><b>${esc(t.name)}</b></div>
-    ${t.playerIds.map(id => `<button class="pbtn" data-a="goal" data-team="${t.id}" data-p="${id}"><span>${esc(P(id)?.name)}</span><span>⚽</span></button>`).join('')}
-    <button class="pbtn mute" data-a="goal" data-team="${t.id}" data-p="">Own goal / unknown</button></div>`;
+    ${squadOf(n, m, t.id).map(id => `<button class="pbtn" data-a="goal" data-team="${t.id}" data-p="${id}"><span>${esc(P(id)?.name)}</span><span>⚽</span></button>`).join('')}
+    <button class="pbtn mute" data-a="goal" data-team="${t.id}" data-p="">Own goal / unknown</button>
+    ${cfg().allowSubs ? `<button class="pbtn mute" data-a="subStart" data-team="${t.id}">🔁 Substitute</button>` : ''}</div>`;
   const log = goalsSorted(m).map((g, i) => {
     const t = teamOf(n, g.teamId);
     return `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="dot" style="background:${t.color}"></span>
@@ -383,7 +408,8 @@ function viewMatch(n, m) {
     <button class="pri" data-a="saveMatch" style="width:100%;padding:14px">${m.saved ? '✓ Saved · Back to night' : 'Save game'}</button>
     <p class="mute" style="text-align:center">Tap the scorer, then choose the assist</p>
     <div class="grid g2">${col(ta)}${col(tb)}</div>
-    <h2>Goals</h2><div class="card">${log || '<span class="mute">No goals yet</span>'}</div>`;
+    <h2>Goals</h2><div class="card">${log || '<span class="mute">No goals yet</span>'}</div>
+    ${(m.subs || []).length ? `<h2>Substitutions</h2><div class="card">${m.subs.map(x => `<div class="mute">🔁 ${esc(P(x.out)?.name)} ⇄ ${esc(P(x.in)?.name)}</div>`).join('')}</div>` : ''}`;
 }
 
 /* setup (choose attendees + teams) */
@@ -395,6 +421,7 @@ function startDraft() {
 function draftFromNight(n) {
   const d = { date: n.date, k: n.teams.length, att: {}, assign: {}, edit: n.id };
   n.teams.forEach((t, i) => t.playerIds.forEach(id => { d.att[id] = true; d.assign[id] = i; }));
+  (n.bench || []).forEach(id => { d.att[id] = true; });
   return d;
 }
 function viewSetup() {
@@ -416,7 +443,7 @@ function viewSetup() {
   }).join('');
 
   const unassigned = present.filter(p => d.assign[p.id] == null).sort(byGrade);
-  const unSec = unassigned.length ? `<div class="card"><b>Here, no team yet</b> <span class="mute">(${unassigned.length}) tap a colour</span>${unassigned.map(row).join('')}</div>` : '';
+  const unSec = unassigned.length ? `<div class="card"><b>${cfg().allowSubs ? 'Bench' : 'Here, no team yet'}</b> <span class="mute">(${unassigned.length}) ${cfg().allowSubs ? 'tap a colour to put on a team' : 'tap a colour'}</span>${unassigned.map(row).join('')}</div>` : '';
 
   const absent = all.filter(p => !d.att[p.id]);
   const mixed = absent.some(p => p.regular) && absent.some(p => !p.regular);
@@ -431,17 +458,21 @@ function viewSetup() {
     ${absentRows || (all.length ? '<div class="mute" style="padding:6px 0">Everyone is here 🎉</div>' : '<div class="empty">No players yet. Add them below or in the Players tab.</div>')}
     <div class="row" style="margin-top:10px"><input id="quick" placeholder="New player name" class="sp"><button data-a="quickAdd">Add</button></div></div>`;
 
-  const per = cfg().perSide, need = d.k * per, diff = present.length - need, exact = diff === 0;
-  const placedAll = present.every(p => d.assign[p.id] != null);
+  const subs = cfg().allowSubs, per = cfg().perSide, need = d.k * per, diff = present.length - need;
+  const enough = subs ? diff >= 0 : diff === 0;
+  const placedAll = subs || present.every(p => d.assign[p.id] != null);
   const sizesOk = Array.from({ length: d.k }, (_, i) => present.filter(p => d.assign[p.id] === i).length === per).every(Boolean);
-  const ready = exact && placedAll && sizesOk;
-  const msg = !exact ? `${present.length} here. You need exactly ${need} (${d.k} teams of ${per}): ${diff > 0 ? `untick ${diff}` : `add ${-diff} more`}.`
-    : !ready ? `${present.length} here. Put exactly ${per} players on each team, or tap Auto-balance.` : `${present.length} here · ${d.k} teams of ${per} ✓`;
+  const ready = enough && placedAll && sizesOk;
+  const benchN = subs ? present.filter(p => d.assign[p.id] == null).length : 0;
+  const msg = !enough ? (subs ? `${present.length} here. You need at least ${need} (${d.k} teams of ${per}): add ${-diff} more.`
+      : `${present.length} here. You need exactly ${need} (${d.k} teams of ${per}): ${diff > 0 ? `untick ${diff}` : `add ${-diff} more`}.`)
+    : !ready ? `${present.length} here. Put exactly ${per} players on each team, or tap Auto-balance.`
+    : `${present.length} here · ${d.k} teams of ${per} ✓${benchN ? ` · ${benchN} on the bench` : ''}`;
   return `<div class="row"><h2 class="sp">${d.edit ? 'Edit teams' : 'Set up tonight'}</h2><button class="sm" data-a="cancelDraft">Cancel</button></div>
     <div class="card"><div class="row"><span>Date</span><input type="date" value="${d.date}" data-c="ddate"><span class="sp"></span><span>Teams</span>
       <select data-c="dk">${[2, 3, 4].map(k => `<option ${k === d.k ? 'selected' : ''}>${k}</option>`).join('')}</select></div></div>
     <div class="${ready ? 'mute' : ''}" style="margin:-4px 0 10px;${ready ? '' : 'color:var(--warn)'}">${msg}</div>
-    <div class="row" style="margin-bottom:10px"><button data-a="autoBalance" ${exact ? '' : 'disabled'}>🎲 Auto-balance</button><span class="sp"></span>
+    <div class="row" style="margin-bottom:10px"><button data-a="autoBalance" ${enough ? '' : 'disabled'}>🎲 Auto-balance</button><span class="sp"></span>
       <button class="pri" data-a="beginNight" ${ready ? '' : 'disabled'}>${d.edit ? 'Save teams' : 'Start night'}</button></div>
     ${teamSecs}${unSec}${absSec}`;
 }
@@ -490,6 +521,7 @@ function viewSettings() {
   return `<div class="card"><b>Game</b>${num('matchMins', 'Game length (minutes)', 1, 60)}${num('extraMins', 'Extra time (minutes)', 0, 15, 'Set to 0 to turn extra time off')}
       ${chk('extraTied', 'Offer extra time when tied', 'Shown at full time if the score is level')}${chk('sound', 'Sound & vibration at full time')}</div>
     <div class="card"><b>Teams</b>${num('teams', 'Number of teams', 2, 4)}${num('perSide', 'Players per team', 2, 11, 'For example 5 means 5 vs 5')}
+      ${chk('allowSubs', 'Allow substitutes (bench)', 'Off: you need exactly teams × players per team. On: extra players wait on a bench and can be swapped in during a game.')}
       <p class="mute" style="margin-bottom:0">Format: ${Array(c.teams).fill(c.perSide).join(' vs ')} · used as the default when setting up a night</p></div>
     <div class="card"><button data-a="resetSettings">Reset settings to defaults</button></div>
     ${acctCard()}
@@ -513,7 +545,7 @@ function sheetHtml() {
   if (s.type === 'assist') {
     const n = activeNight(), t = teamOf(n, s.teamId);
     return `<h2 style="margin-top:0">Assist by?</h2><p class="mute">${s.scorer ? esc(P(s.scorer).name) + ' scored' : 'Goal'}</p>
-      ${t.playerIds.filter(id => id !== s.scorer).map(id => `<button class="pbtn" data-a="assist" data-p="${id}">${esc(P(id)?.name)}</button>`).join('')}
+      ${squadOf(n, n.matches.find(x => x.id === ui.matchId), s.teamId).filter(id => id !== s.scorer).map(id => `<button class="pbtn" data-a="assist" data-p="${id}">${esc(P(id)?.name)}</button>`).join('')}
       <button class="pbtn pri" data-a="assist" data-p="">No assist</button>`;
   }
   if (s.type === 'finish') {
@@ -534,6 +566,16 @@ function sheetHtml() {
     const st = [['Grade', R.grade.toFixed(1)], ['Games', R.gp], ['Nights', R.nt], ['W-D-L', `${R.w}-${R.d}-${R.l}`], ['Goals', R.g], ['Assists', R.a], ['Goal diff', R.gf - R.ga], ['Win %', R.gp ? Math.round((R.w + R.d / 2) / R.gp * 100) + '%' : '–']];
     return `<h2 style="margin-top:0">${esc(p.name)}</h2><div class="grid g2">${st.map(([l, v]) => `<div class="card" style="margin:0"><div class="mute">${l}</div><b style="font-size:20px">${v}</b></div>`).join('')}</div>${spark}
       <button data-a="closeSheet" style="width:100%;margin-top:12px">Close</button>`;
+  }
+  if (s.type === 'subOut') {
+    const n = activeNight(), m = n.matches.find(x => x.id === ui.matchId);
+    return `<h2 style="margin-top:0">Who comes off?</h2>${squadOf(n, m, s.teamId).map(id => `<button class="pbtn" data-a="subOut" data-p="${id}">${esc(P(id)?.name)}</button>`).join('')}`;
+  }
+  if (s.type === 'subIn') {
+    const n = activeNight(), m = n.matches.find(x => x.id === ui.matchId);
+    const inGame = new Set([...squadOf(n, m, m.a), ...squadOf(n, m, m.b)]);
+    const pool = [...new Set([...n.teams.flatMap(t => t.playerIds), ...(n.bench || [])])].filter(id => !inGame.has(id) && P(id));
+    return `<h2 style="margin-top:0">Who comes on for ${esc(P(s.out)?.name)}?</h2>${pool.length ? pool.map(id => `<button class="pbtn" data-a="subIn" data-p="${id}">${esc(P(id)?.name)}</button>`).join('') : '<p class="mute">Nobody else is available tonight.</p>'}`;
   }
   if (s.type === 'goalTime') {
     const n = activeNight(), m = n && n.matches.find(x => x.id === ui.matchId), g = m && m.goals.find(x => x.id === s.gid);
@@ -562,36 +604,39 @@ const A = {
   editTeams: () => { ui.draft = draftFromNight(activeNight()); },
   cancelDraft: () => { ui.draft = null; },
   tickRegulars: () => { activePlayers().filter(p => p.regular).forEach(p => ui.draft.att[p.id] = true); },
-  assign: d => { ui.draft.assign[d.p] = +d.i; },
+  assign: d => { const a = ui.draft.assign; if (cfg().allowSubs && a[d.p] === +d.i) delete a[d.p]; else a[d.p] = +d.i; },
   quickAdd: () => { const el = document.getElementById('quick'); const nm = el.value.trim(); if (!nm) return; const p = newPlayer(nm); ui.draft.att[p.id] = true; save(); },
   autoBalance: () => {
-    const d = ui.draft, ids = activePlayers().filter(p => d.att[p.id]).map(p => p.id);
-    if (ids.length !== d.k * cfg().perSide) return alert(`You need exactly ${d.k * cfg().perSide} players (${d.k} teams of ${cfg().perSide}).`);
+    const d = ui.draft, subs = cfg().allowSubs, need = d.k * cfg().perSide;
+    let ids = activePlayers().filter(p => d.att[p.id]).map(p => p.id);
+    if (subs ? ids.length < need : ids.length !== need) return alert(`You need ${subs ? 'at least' : 'exactly'} ${need} players (${d.k} teams of ${cfg().perSide}).`);
+    if (ids.length > need) ids = ids.map(id => ({ id, k: Math.random() + (P(id).regular ? .5 : 0) })).sort((a, b) => b.k - a.k).slice(0, need).map(x => x.id);
     const teams = balance(ids, d.k);
     d.assign = {}; teams.forEach((t, i) => t.forEach(id => d.assign[id] = i));
   },
   beginNight: () => {
     const d = ui.draft, ids = activePlayers().filter(p => d.att[p.id]).map(p => p.id);
     const per = cfg().perSide;
-    if (ids.length !== d.k * per) return alert(`You need exactly ${d.k * per} players (${d.k} teams of ${per}) to start.`);
-    if (Array.from({ length: d.k }, (_, i) => ids.filter(id => d.assign[id] === i).length).some(n => n !== per && n !== 0)) return alert(`Each team needs exactly ${per} players.`);
-    if (ids.some(id => d.assign[id] == null)) return alert('Some players are not on a team yet. Tap a colour for each player, or use Auto-balance.');
+    const subs = cfg().allowSubs;
+    if (subs ? ids.length < d.k * per : ids.length !== d.k * per) return alert(`You need ${subs ? 'at least' : 'exactly'} ${d.k * per} players (${d.k} teams of ${per}) to start.`);
+    if (Array.from({ length: d.k }, (_, i) => ids.filter(id => d.assign[id] === i).length).some(n => n !== per)) return alert(`Each team needs exactly ${per} players.`);
+    if (!subs && ids.some(id => d.assign[id] == null)) return alert('Some players are not on a team yet. Tap a colour for each player, or use Auto-balance.');
     const teams = Array.from({ length: d.k }, (_, i) => ({ id: uid(), name: COLORS[i].n, color: COLORS[i].c, playerIds: ids.filter(id => d.assign[id] === i) })).filter(t => t.playerIds.length);
     if (teams.length < 2) return alert('You need at least two teams with players.');
     if (d.edit) {
       const n = S.nights.find(x => x.id === d.edit);
       // keep team ids stable where the colour matches so existing games stay linked
       const old = n.teams; teams.forEach(t => { const o = old.find(x => x.name === t.name); if (o) t.id = o.id; });
-      n.teams = teams; n.date = d.date;
+      n.teams = teams; n.date = d.date; n.bench = ids.filter(id => d.assign[id] == null);
       n.matches = n.matches.filter(m => teamOf(n, m.a) && teamOf(n, m.b));
       n.matches.forEach(m => m.goals = m.goals.filter(g => teamOf(n, g.teamId)));
-    } else S.nights.push({ id: uid(), date: d.date, created: String(Date.now()), teams, matches: [], finished: false });
+    } else S.nights.push({ id: uid(), date: d.date, created: String(Date.now()), teams, bench: ids.filter(id => d.assign[id] == null), matches: [], finished: false });
     ui.draft = null; ui.nm = {}; save();
   },
   newMatch: () => {
     const n = activeNight(), a = document.getElementById('nmA').value, b = document.getElementById('nmB').value;
     if (a === b) return alert('Pick two different teams.');
-    const m = { id: uid(), a, b, goals: [] }; n.matches.push(m); ui.matchId = m.id; ui.nm = { a, b }; save();
+    const m = { id: uid(), a, b, goals: [] }; n.matches.push(m); ui.matchId = m.id; ui.nm = {}; save();
   },
   openMatch: d => { ui.matchId = d.id; },
   closeMatch: () => { ui.matchId = null; },
@@ -612,7 +657,24 @@ const A = {
   goal: d => { ui.sheet = { type: 'assist', teamId: d.team, scorer: d.p || null }; },
   assist: d => {
     const n = activeNight(), m = n.matches.find(x => x.id === ui.matchId), s = ui.sheet;
-    m.goals.push({ id: uid(), teamId: s.teamId, scorer: s.scorer, assist: d.p || null, min: curMinute(m) }); m.saved = false; ui.sheet = null; save();
+    const g = { id: uid(), teamId: s.teamId, scorer: s.scorer, assist: d.p || null, min: curMinute(m) };
+    m.goals.push(g); m.saved = false; ui.sheet = null; save();
+    ui.toast = { gid: g.id, text: `⚽ ${s.scorer ? P(s.scorer)?.name : 'Goal'} scored${d.p ? ` · assist ${P(d.p)?.name}` : ''}` };
+    setTimeout(() => { if (ui.toast && ui.toast.gid === g.id) { ui.toast = null; render(); } }, 7000);
+  },
+  undoGoal: () => {
+    const t = ui.toast; ui.toast = null; if (!t) return;
+    const n = activeNight(), m = n && n.matches.find(x => x.id === ui.matchId); if (!m) return;
+    m.goals = m.goals.filter(g => g.id !== t.gid); m.saved = false; save();
+  },
+  subStart: d => { ui.sheet = { type: 'subOut', teamId: d.team }; },
+  subOut: d => { ui.sheet = { type: 'subIn', teamId: ui.sheet.teamId, out: d.p }; },
+  subIn: d => {
+    const n = activeNight(), m = n.matches.find(x => x.id === ui.matchId), s = ui.sheet;
+    if (!m.squads) m.squads = { [m.a]: squadOf(n, m, m.a).slice(), [m.b]: squadOf(n, m, m.b).slice() };
+    m.squads[s.teamId] = m.squads[s.teamId].map(id => id === s.out ? d.p : id);
+    (m.subs = m.subs || []).push({ t: s.teamId, out: s.out, in: d.p });
+    m.saved = false; ui.sheet = null; save();
   },
   editGoalTime: d => { ui.sheet = { type: 'goalTime', gid: d.id }; },
   saveGoalTime: () => {
@@ -647,7 +709,8 @@ const A = {
     S.players = S.players.filter(x => x.id !== p.id);
     S.nights.forEach(n => {
       n.teams.forEach(t => t.playerIds = t.playerIds.filter(id => id !== p.id));
-      n.matches.forEach(m => m.goals.forEach(g => { if (g.scorer === p.id) g.scorer = null; if (g.assist === p.id) g.assist = null; }));
+      n.matches.forEach(m => { m.goals.forEach(g => { if (g.scorer === p.id) g.scorer = null; if (g.assist === p.id) g.assist = null; }); if (m.squads) Object.keys(m.squads).forEach(k => m.squads[k] = m.squads[k].filter(id => id !== p.id)); });
+      if (n.bench) n.bench = n.bench.filter(id => id !== p.id);
     });
     if (ui.draft) { delete ui.draft.att[p.id]; delete ui.draft.assign[p.id]; }
     ui.sheet = null; save();
@@ -712,7 +775,7 @@ document.addEventListener('change', e => {
   if (c === 'att') { d.att[t.dataset.p] = t.checked; if (!t.checked) delete d.assign[t.dataset.p]; }
   else if (c === 'ddate') d.date = t.value || today();
   else if (c === 'dk') { d.k = +t.value; Object.keys(d.assign).forEach(k => { if (d.assign[k] >= d.k) delete d.assign[k]; }); }
-  else if (c === 'nm') ui.nm = { a: document.getElementById('nmA').value, b: document.getElementById('nmB').value };
+  else if (c === 'nm') ui.nm = { a: document.getElementById('nmA').value, b: document.getElementById('nmB').value, at: activeNight().matches.length };
   else if (c === 'set') {
     const k = t.dataset.k, def = DEFAULTS[k];
     const v = t.type === 'checkbox' ? t.checked : clamp(Math.round(parseFloat(t.value)), +t.dataset.min, +t.dataset.max);
