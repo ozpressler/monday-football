@@ -25,7 +25,7 @@ button:disabled{opacity:.4}
 input,select,textarea{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 10px;max-width:100%}
 input[type=number]{width:70px}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
-nav button{flex:1;border:0;border-radius:0;background:none;padding:12px 4px;color:var(--mute);font-size:13px}
+nav button{flex:1;border:0;border-radius:0;background:none;padding:12px 2px;color:var(--mute);font-size:12px}
 nav button.on{color:var(--accent);font-weight:700}
 .dot{width:12px;height:12px;border-radius:50%;display:inline-block;flex:none}
 .pill{display:inline-block;background:var(--soft);border-radius:99px;padding:3px 10px;font-size:13px;margin:2px 4px 2px 0}
@@ -41,6 +41,7 @@ tr.clk{cursor:pointer}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:9}
 .sheet{background:var(--card);width:100%;max-width:720px;max-height:85vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
 .up{color:var(--accent)}.down{color:var(--warn)}
+.clock{font-size:60px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;letter-spacing:2px;line-height:1.1}.clock.low{color:var(--warn)}
 .empty{text-align:center;color:var(--mute);padding:30px 10px}
 </style>
 </head>
@@ -211,9 +212,61 @@ function balance(ids, k) {
   return good[Math.floor(Math.random() * good.length)].teams;
 }
 
-/* ---------- UI state ---------- */
-const ui = { tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
+/* ---------- settings ---------- */
+const DEFAULTS = { matchMins: 8, extraMins: 2, extraTied: true, sound: true, teams: 3, perSide: 5 };
+const cfg = () => ({ ...DEFAULTS, ...(S.settings || {}) });
 
+/* ---------- game timer (per device, not shared) ---------- */
+let actx = null, wake = null;
+function ensureAudio() { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch { } }
+async function requestWake() { try { if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); } catch { } }
+function releaseWake() { try { wake && wake.release(); } catch { } wake = null; }
+function alarm() {
+  if (!cfg().sound) return;
+  try { navigator.vibrate && navigator.vibrate([400, 150, 400, 150, 400]); } catch { }
+  try { if (!actx) return; [0, .35, .7].forEach(d => { const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = 880; g.gain.value = .25; o.connect(g); g.connect(actx.destination); o.start(actx.currentTime + d); o.stop(actx.currentTime + d + .25); }); } catch { }
+}
+const saveTimer = () => lsSet('mf.timer', ui.timer ? JSON.stringify(ui.timer) : '');
+const freshTimer = matchId => ({ matchId, phase: 'main', remaining: cfg().matchMins * 60000, endAt: null, running: false, done: false });
+function timerState(matchId) { if (!ui.timer || ui.timer.matchId !== matchId) { ui.timer = freshTimer(matchId); saveTimer(); } return ui.timer; }
+const timeLeft = t => t.running ? Math.max(0, t.endAt - Date.now()) : t.remaining;
+const fmtClock = ms => { const s = Math.ceil(ms / 1000); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+function timerHtml(m) {
+  const t = timerState(m.id), left = timeLeft(t), c = cfg();
+  const tied = score(m, m.a) === score(m, m.b);
+  const full = (t.phase === 'extra' ? c.extraMins : c.matchMins) * 60000;
+  let controls, note = '';
+  if (t.done) {
+    note = `<div style="text-align:center"><b>${t.phase === 'extra' ? 'Full time (after extra time)' : 'Full time'}</b></div>`;
+    controls = (t.phase === 'main' && tied && c.extraMins > 0 && c.extraTied ? `<button class="pri sp" data-a="timerExtra">+ ${c.extraMins} min extra time</button>` : '') + '<button data-a="timerReset">Reset</button>';
+  } else {
+    if (t.phase === 'extra') note = '<div style="text-align:center"><span class="pill">Extra time</span></div>';
+    controls = `<button class="pri sp" data-a="timerToggle">${t.running ? 'Pause' : left < full ? 'Resume' : 'Start'}</button><button data-a="timerReset">Reset</button>`;
+  }
+  return `<div class="card"><div class="clock ${left <= 30000 && !t.done ? 'low' : ''}" id="clock">${fmtClock(left)}</div>${note}<div class="row" style="margin-top:8px">${controls}</div></div>`;
+}
+setInterval(() => {
+  const t = ui.timer; if (!t || !t.running) return;
+  const left = timeLeft(t), el = document.getElementById('clock');
+  if (el) { el.textContent = fmtClock(left); el.classList.toggle('low', left <= 30000); }
+  if (left <= 0) { t.running = false; t.remaining = 0; t.done = true; releaseWake(); if (Date.now() - t.endAt < 8000) alarm(); saveTimer(); render(); }
+}, 250);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ui.timer && ui.timer.running) requestWake(); });
+
+/* minute of play for a new goal, taken from this game's timer (null if the timer wasn't used) */
+function curMinute(m) {
+  const t = ui.timer; if (!t || t.matchId !== m.id) return null;
+  const c = cfg(), full = c.matchMins * 60000, left = timeLeft(t);
+  const el = t.phase === 'extra' ? full + (c.extraMins * 60000 - left) : full - left;
+  if (el <= 0 && !t.running && !t.done) return null;
+  return Math.max(1, Math.ceil(el / 60000));
+}
+const goalsSorted = m => m.goals.map((g, i) => [g, i]).sort((a, b) => (a[0].min ?? 9999) - (b[0].min ?? 9999) || a[1] - b[1]).map(x => x[0]);
+
+/* ---------- UI state ---------- */
+const ui = { timer: null, tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
+
+try { ui.timer = JSON.parse(lsGet('mf.timer') || 'null'); } catch { }
 function render() {
   if (cloud.on && !cloud.authed) {
     document.getElementById('nav').innerHTML = ''; document.getElementById('ov').innerHTML = '';
@@ -223,9 +276,9 @@ function render() {
       ${cloud.err ? `<p class="down">${esc(cloud.err)}</p>` : ''}</div>`;
     return updateSub();
   }
-  const nav = RO() ? [['night', '⚽ Tonight'], ['stats', '📊 Stats'], ['data', '👤 Account']] : [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['data', '💾 Data']];
+  const nav = RO() ? [['night', '⚽ Tonight'], ['stats', '📊 Stats'], ['data', '👤 Account']] : [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['settings', '⚙️ Settings'], ['data', '💾 Data']];
   document.getElementById('nav').innerHTML = nav.map(([k, l]) => `<button class="${ui.tab === k ? 'on' : ''}" data-a="tab" data-k="${k}">${l}</button>`).join('');
-  const v = { night: viewNight, stats: viewStats, players: viewPlayers, data: viewData }[ui.tab]();
+  const v = { night: viewNight, stats: viewStats, players: viewPlayers, settings: viewSettings, data: viewData }[ui.tab]();
   document.getElementById('app').innerHTML = v;
   document.getElementById('ov').innerHTML = ui.sheet ? `<div class="overlay" data-a="closeSheet"><div class="sheet" data-stop>${sheetHtml()}</div></div>` : '';
   updateSub();
@@ -238,7 +291,7 @@ function viewNightRO() {
   const ts = n.teams.map(t => `<div class="card"><div class="row"><span class="dot" style="background:${t.color}"></span><b>${esc(t.name)}</b></div><div>${t.playerIds.map(id => `<span class="pill">${esc(P(id)?.name)}</span>`).join('')}</div></div>`).join('');
   const ms = n.matches.map((m, i) => {
     const ta = teamOf(n, m.a), tb = teamOf(n, m.b);
-    const goals = m.goals.map(g => `<div class="mute">⚽ ${g.scorer ? esc(P(g.scorer)?.name) : 'Own goal / unknown'}${g.assist ? ` (assist ${esc(P(g.assist)?.name)})` : ''}</div>`).join('');
+    const goals = goalsSorted(m).map(g => `<div class="mute">⚽ ${g.min != null ? g.min + "'" : ''} ${g.scorer ? esc(P(g.scorer)?.name) : 'Own goal / unknown'}${g.assist ? ` (assist ${esc(P(g.assist)?.name)})` : ''}</div>`).join('');
     return `<div class="card"><div class="row"><span class="mute">Game ${i + 1}</span><span class="sp"></span><span class="dot" style="background:${ta.color}"></span><b>${esc(ta.name)} ${score(m, m.a)} – ${score(m, m.b)} ${esc(tb.name)}</b><span class="dot" style="background:${tb.color}"></span></div>${goals}</div>`;
   }).reverse().join('');
   return `<h2>Tonight · ${esc(n.date)}</h2>${ts}<h2>Games</h2>${ms || '<div class="empty">No games yet</div>'}<p class="mute">Updates automatically every few seconds.</p>`;
@@ -275,15 +328,16 @@ function viewMatch(n, m) {
   const col = (t) => `<div><div class="row" style="margin-bottom:8px"><span class="dot" style="background:${t.color}"></span><b>${esc(t.name)}</b></div>
     ${t.playerIds.map(id => `<button class="pbtn" data-a="goal" data-team="${t.id}" data-p="${id}"><span>${esc(P(id)?.name)}</span><span>⚽</span></button>`).join('')}
     <button class="pbtn mute" data-a="goal" data-team="${t.id}" data-p="">Own goal / unknown</button></div>`;
-  const log = m.goals.map((g, i) => {
+  const log = goalsSorted(m).map((g, i) => {
     const t = teamOf(n, g.teamId);
     return `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="dot" style="background:${t.color}"></span>
-      <span class="sp">${g.scorer ? esc(P(g.scorer)?.name) : '<i>Own goal / unknown</i>'}${g.assist ? ` <span class="mute">(assist ${esc(P(g.assist)?.name)})</span>` : ''}</span>
+      <button class="sm" data-a="editGoalTime" data-id="${g.id}" title="Edit time">${g.min != null ? g.min + "'" : '⏱ –'}</button><span class="sp">${g.scorer ? esc(P(g.scorer)?.name) : '<i>Own goal / unknown</i>'}${g.assist ? ` <span class="mute">(assist ${esc(P(g.assist)?.name)})</span>` : ''}</span>
       <button class="sm danger" data-a="delGoal" data-id="${g.id}">✕</button></div>`;
   }).join('');
   return `<div class="row"><button class="sm" data-a="closeMatch">← Back</button><span class="sp"></span><button class="sm danger" data-a="delMatch">Delete game</button></div>
     <div class="card" style="margin-top:10px"><div class="score">${score(m, m.a)} – ${score(m, m.b)}</div>
     <div class="row" style="justify-content:center"><span class="dot" style="background:${ta.color}"></span>${esc(ta.name)} <span class="mute">vs</span> ${esc(tb.name)}<span class="dot" style="background:${tb.color}"></span></div></div>
+    ${timerHtml(m)}
     <button class="pri" data-a="saveMatch" style="width:100%;padding:14px">${m.saved ? '✓ Saved · Back to night' : 'Save game'}</button>
     <p class="mute" style="text-align:center">Tap the scorer, then choose the assist</p>
     <div class="grid g2">${col(ta)}${col(tb)}</div>
@@ -293,7 +347,7 @@ function viewMatch(n, m) {
 /* setup (choose attendees + teams) */
 function startDraft() {
   const G = grades();
-  ui.draft = { date: today(), k: 3, att: {}, assign: {}, edit: null };
+  ui.draft = { date: today(), k: cfg().teams, att: {}, assign: {}, edit: null };
   ui.tab = 'night'; render();
 }
 function draftFromNight(n) {
@@ -338,6 +392,7 @@ function viewSetup() {
   return `<div class="row"><h2 class="sp">${d.edit ? 'Edit teams' : 'Set up tonight'}</h2><button class="sm" data-a="cancelDraft">Cancel</button></div>
     <div class="card"><div class="row"><span>Date</span><input type="date" value="${d.date}" data-c="ddate"><span class="sp"></span><span>Teams</span>
       <select data-c="dk">${[2, 3, 4].map(k => `<option ${k === d.k ? 'selected' : ''}>${k}</option>`).join('')}</select></div></div>
+    <div class="mute" style="margin:-4px 0 10px">${present.length} here · ${d.k} teams of ${cfg().perSide} = ${d.k * cfg().perSide} ${present.length === d.k * cfg().perSide ? '✓' : present.length > d.k * cfg().perSide ? `(${present.length - d.k * cfg().perSide} extra)` : `(${d.k * cfg().perSide - present.length} short)`}</div>
     <div class="row" style="margin-bottom:10px"><button data-a="autoBalance" ${present.length >= d.k ? '' : 'disabled'}>🎲 Auto-balance (${present.length} here)</button><span class="sp"></span>
       <button class="pri" data-a="beginNight">${d.edit ? 'Save teams' : 'Start night'}</button></div>
     ${teamSecs}${unSec}${absSec}`;
@@ -374,6 +429,21 @@ function viewPlayers() {
       <label class="mute">Start <input type="number" step="0.5" min="1" max="10" value="${p.seed ?? 5}" data-c="pseed" data-p="${p.id}"></label>
       <label class="mute">Adjust <input type="number" step="0.5" min="-3" max="3" value="${p.adj || 0}" data-c="padj" data-p="${p.id}"></label>
       <span class="sp"></span><button class="sm" data-a="toggleActive" data-p="${p.id}">${p.inactive ? 'Restore' : 'Retire'}</button><button class="sm danger" data-a="deletePlayer" data-p="${p.id}">Delete</button></div></div>`).join('') || '<div class="empty">Add your first players above</div>'}`;
+}
+
+/* ---------- Settings tab ---------- */
+function viewSettings() {
+  const c = cfg();
+  const line = 'padding:10px 0;border-bottom:1px solid var(--line)';
+  const num = (k, label, min, max, hint) => `<div class="row" style="${line}"><div class="sp"><div>${label}</div>${hint ? `<div class="mute">${hint}</div>` : ''}</div>
+    <input type="number" inputmode="numeric" min="${min}" max="${max}" value="${c[k]}" data-c="set" data-k="${k}" data-min="${min}" data-max="${max}"></div>`;
+  const chk = (k, label, hint) => `<label class="row" style="${line};cursor:pointer"><div class="sp"><div>${label}</div>${hint ? `<div class="mute">${hint}</div>` : ''}</div>
+    <input type="checkbox" ${c[k] ? 'checked' : ''} data-c="set" data-k="${k}"></label>`;
+  return `<div class="card"><b>Game</b>${num('matchMins', 'Game length (minutes)', 1, 60)}${num('extraMins', 'Extra time (minutes)', 0, 15, 'Set to 0 to turn extra time off')}
+      ${chk('extraTied', 'Offer extra time when tied', 'Shown at full time if the score is level')}${chk('sound', 'Sound & vibration at full time')}</div>
+    <div class="card"><b>Teams</b>${num('teams', 'Number of teams', 2, 4)}${num('perSide', 'Players per team', 2, 11, 'For example 5 means 5 vs 5')}
+      <p class="mute" style="margin-bottom:0">Format: ${Array(c.teams).fill(c.perSide).join(' vs ')} · used as the default when setting up a night</p></div>
+    <div class="card"><button data-a="resetSettings">Reset to defaults</button></div>`;
 }
 
 /* ---------- Data tab ---------- */
@@ -414,6 +484,13 @@ function sheetHtml() {
     const st = [['Grade', R.grade.toFixed(1)], ['Games', R.gp], ['Nights', R.nt], ['W-D-L', `${R.w}-${R.d}-${R.l}`], ['Goals', R.g], ['Assists', R.a], ['Goal diff', R.gf - R.ga], ['Win %', R.gp ? Math.round((R.w + R.d / 2) / R.gp * 100) + '%' : '–']];
     return `<h2 style="margin-top:0">${esc(p.name)}</h2><div class="grid g2">${st.map(([l, v]) => `<div class="card" style="margin:0"><div class="mute">${l}</div><b style="font-size:20px">${v}</b></div>`).join('')}</div>${spark}
       <button data-a="closeSheet" style="width:100%;margin-top:12px">Close</button>`;
+  }
+  if (s.type === 'goalTime') {
+    const n = activeNight(), m = n && n.matches.find(x => x.id === ui.matchId), g = m && m.goals.find(x => x.id === s.gid);
+    if (!g) return '';
+    return `<h2 style="margin-top:0">Time of goal</h2><p class="mute">${g.scorer ? esc(P(g.scorer)?.name) : 'Own goal / unknown'}</p>
+      <div class="row"><input type="number" id="gmin" inputmode="numeric" min="1" max="120" value="${g.min ?? ''}" placeholder="minute" class="sp"><span>minute</span></div>
+      <div class="row" style="margin-top:12px"><button data-a="clearGoalTime">No time</button><span class="sp"></span><button class="pri" data-a="saveGoalTime">Save</button></div>`;
   }
   return '';
 }
@@ -460,12 +537,34 @@ const A = {
   },
   openMatch: d => { ui.matchId = d.id; },
   closeMatch: () => { ui.matchId = null; },
-  saveMatch: () => { const m = activeNight().matches.find(x => x.id === ui.matchId); m.saved = true; ui.matchId = null; save(); },
+  timerToggle: () => {
+    const t = timerState(ui.matchId);
+    if (t.running) { t.remaining = timeLeft(t); t.endAt = null; t.running = false; releaseWake(); }
+    else if (!t.done) { ensureAudio(); t.endAt = Date.now() + t.remaining; t.running = true; requestWake(); }
+    saveTimer();
+  },
+  timerReset: () => { ui.timer = freshTimer(ui.matchId); releaseWake(); saveTimer(); },
+  timerExtra: () => {
+    const t = timerState(ui.matchId); ensureAudio();
+    t.phase = 'extra'; t.done = false; t.remaining = cfg().extraMins * 60000; t.endAt = Date.now() + t.remaining; t.running = true; requestWake(); saveTimer();
+  },
+  resetSettings: () => { delete S.settings; ui.timer = null; saveTimer(); save(); },
+  saveMatch: () => { const m = activeNight().matches.find(x => x.id === ui.matchId); m.saved = true; if (ui.timer && ui.timer.running) { ui.timer.remaining = timeLeft(ui.timer); ui.timer.endAt = null; ui.timer.running = false; releaseWake(); saveTimer(); } ui.matchId = null; save(); },
   delMatch: () => { if (!confirm('Delete this game?')) return; const n = activeNight(); n.matches = n.matches.filter(m => m.id !== ui.matchId); ui.matchId = null; save(); },
   goal: d => { ui.sheet = { type: 'assist', teamId: d.team, scorer: d.p || null }; },
   assist: d => {
     const n = activeNight(), m = n.matches.find(x => x.id === ui.matchId), s = ui.sheet;
-    m.goals.push({ id: uid(), teamId: s.teamId, scorer: s.scorer, assist: d.p || null }); m.saved = false; ui.sheet = null; save();
+    m.goals.push({ id: uid(), teamId: s.teamId, scorer: s.scorer, assist: d.p || null, min: curMinute(m) }); m.saved = false; ui.sheet = null; save();
+  },
+  editGoalTime: d => { ui.sheet = { type: 'goalTime', gid: d.id }; },
+  saveGoalTime: () => {
+    const m = activeNight().matches.find(x => x.id === ui.matchId), g = m.goals.find(x => x.id === ui.sheet.gid);
+    const v = parseInt(document.getElementById('gmin').value, 10);
+    g.min = Number.isNaN(v) ? null : clamp(v, 1, 120); m.saved = false; ui.sheet = null; save();
+  },
+  clearGoalTime: () => {
+    const m = activeNight().matches.find(x => x.id === ui.matchId), g = m.goals.find(x => x.id === ui.sheet.gid);
+    g.min = null; m.saved = false; ui.sheet = null; save();
   },
   delGoal: d => { const m = activeNight().matches.find(x => x.id === ui.matchId); m.goals = m.goals.filter(g => g.id !== d.id); m.saved = false; save(); },
   discardNight: () => { if (!confirm('Discard tonight completely? All games will be lost.')) return; S.nights = S.nights.filter(n => n.finished); ui.matchId = null; save(); },
@@ -501,8 +600,8 @@ const A = {
     const a = document.createElement('a'); a.href = url; a.download = `monday-night-football-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   importPick: () => document.getElementById('file').click(),
-  demo: () => { if (!confirm('This REPLACES all current data with demo data (15 players, 4 nights). Continue?')) return; S = makeDemo(); ui.tab = 'stats'; save(); },
-  wipe: () => { if (confirm('Delete ALL players and games? This cannot be undone.') && confirm('Really delete everything?')) { S = { players: [], nights: [] }; save(); } },
+  demo: () => { if (!confirm('This REPLACES all current data with demo data (15 players, 4 nights). Continue?')) return; S = { ...makeDemo(), settings: S.settings }; ui.tab = 'stats'; save(); },
+  wipe: () => { if (confirm('Delete ALL players and games? This cannot be undone.') && confirm('Really delete everything?')) { S = { players: [], nights: [], settings: S.settings }; save(); } },
 };
 function makeDemo() {
   const names = ['Alex', 'Ben', 'Chris', 'Dan', 'Eli', 'Fabio', 'Gil', 'Hugo', 'Ivan', 'Jack', 'Kai', 'Leo', 'Marco', 'Nico', 'Omar'];
@@ -524,7 +623,7 @@ function makeDemo() {
         for (let k = 0; k < n; k++) {
           const scorer = pick(t.playerIds, 2);
           const assist = Math.random() < .65 ? pick(t.playerIds.filter(id => id !== scorer), 1) : null;
-          goals.push({ id: uid(), teamId: t.id, scorer, assist });
+          goals.push({ id: uid(), teamId: t.id, scorer, assist, min: 1 + Math.floor(Math.random() * 8) });
         }
       });
       return { id: uid(), a: teams[a].id, b: teams[b].id, goals };
@@ -556,6 +655,13 @@ document.addEventListener('change', e => {
   else if (c === 'ddate') d.date = t.value || today();
   else if (c === 'dk') { d.k = +t.value; Object.keys(d.assign).forEach(k => { if (d.assign[k] >= d.k) delete d.assign[k]; }); }
   else if (c === 'nm') ui.nm = { a: document.getElementById('nmA').value, b: document.getElementById('nmB').value };
+  else if (c === 'set') {
+    const k = t.dataset.k, def = DEFAULTS[k];
+    const v = t.type === 'checkbox' ? t.checked : clamp(Math.round(parseFloat(t.value)), +t.dataset.min, +t.dataset.max);
+    S.settings = { ...cfg(), [k]: Number.isNaN(v) ? def : v };
+    if (!ui.timer || !ui.timer.running) { ui.timer = null; saveTimer(); }
+    save();
+  }
   else if (c === 'pname') { if (t.value.trim()) p.name = t.value.trim(); save(); }
   else if (c === 'preg') { p.regular = t.checked; save(); }
   else if (c === 'pseed') { p.seed = clamp(+t.value || 5, 1, 10); save(); }
