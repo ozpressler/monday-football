@@ -630,20 +630,20 @@ const A = {
     const a = document.createElement('a'); a.href = url; a.download = `monday-night-football-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   importPick: () => document.getElementById('file').click(),
-  demo: () => { if (!confirm('This REPLACES all current data with demo data (15 players, 4 nights). Continue?')) return; S = { ...makeDemo(), settings: S.settings }; ui.tab = 'stats'; save(); },
+  demo: () => { if (!confirm('This REPLACES all current data with demo data (20 players, 6 nights). Continue?')) return; S = { ...makeDemo(), settings: S.settings }; ui.tab = 'stats'; save(); },
   wipe: () => { if (confirm('Delete ALL players and games? This cannot be undone.') && confirm('Really delete everything?')) { S = { players: [], nights: [], settings: S.settings }; save(); } },
 };
 function makeDemo() {
-  const names = ['Alex', 'Ben', 'Chris', 'Dan', 'Eli', 'Fabio', 'Gil', 'Hugo', 'Ivan', 'Jack', 'Kai', 'Leo', 'Marco', 'Nico', 'Omar'];
-  const skill = [8, 7, 6.5, 6, 5.5, 5, 7.5, 4.5, 6, 5, 4, 3.5, 6.5, 5.5, 3];
-  const players = names.map((n, i) => ({ id: uid(), name: n, seed: 5, adj: 0, regular: i < 11 }));
+  const names = ['Alex', 'Ben', 'Chris', 'Dan', 'Eli', 'Fabio', 'Gil', 'Hugo', 'Ivan', 'Jack', 'Kai', 'Leo', 'Marco', 'Nico', 'Omar', 'Pablo', 'Quinn', 'Raul', 'Sam', 'Tom'];
+  const skill = [8, 7, 6.5, 6, 5.5, 5, 7.5, 4.5, 6, 5, 4, 3.5, 6.5, 5.5, 3, 6, 4.5, 5.5, 4, 5];
+  const players = names.map((n, i) => ({ id: uid(), name: n, seed: 5, adj: 0, regular: i < 14 }));
   const sk = {}; players.forEach((p, i) => sk[p.id] = skill[i]);
   const pois = l => { const L = Math.exp(-l); let k = 0, p = 1; do { k++; p *= Math.random(); } while (p > L); return k - 1; };
   const pick = (ids, pow) => { const w = ids.map(id => sk[id] ** pow), tot = w.reduce((a, b) => a + b, 0); let r = Math.random() * tot; for (let i = 0; i < ids.length; i++) { r -= w[i]; if (r <= 0) return ids[i]; } return ids[ids.length - 1]; };
   const nights = [];
-  for (let w = 4; w >= 1; w--) {
+  for (let w = 6; w >= 1; w--) {
     const d = new Date(); d.setDate(d.getDate() - 7 * w);
-    const shuffled = players.map(p => p.id).sort(() => Math.random() - .5);
+    const shuffled = players.map(p => ({ id: p.id, k: Math.random() + (p.regular ? .35 : 0) })).sort((a, b) => b.k - a.k).slice(0, 15).map(x => x.id).sort(() => Math.random() - .5);
     const teams = [0, 1, 2].map(i => ({ id: uid(), name: COLORS[i].n, color: COLORS[i].c, playerIds: shuffled.filter((_, j) => j % 3 === i) }));
     const mean = t => t.playerIds.reduce((s, id) => s + sk[id], 0) / t.playerIds.length;
     const matches = [[0, 1], [1, 2], [0, 2], [0, 1], [1, 2], [0, 2]].map(([a, b]) => {
