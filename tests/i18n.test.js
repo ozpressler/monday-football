@@ -7,7 +7,7 @@ const path = require('path');
 const { loadApp, makeMockServer, seedWorld } = require('./helpers');
 const { crawlLocal, crawlCloud, HEBREW_NAMES } = require('./crawl');
 
-const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8').replace(/\r\n/g, '\n');   // same result on Windows and Linux
 const hasLatin = s => /[A-Za-z]{2,}/.test(s);
 // things that are allowed to stay Latin: the language's own name, data typed by users (group names), technical file names
 const ALLOWED = [/^English$/, /Sunday Crew/g, /Thursday/g, /supabase[-\w.]*/gi, /Supabase/g];
@@ -31,7 +31,9 @@ test('Hebrew: every screen reached in signed-in mode is fully translated (sign-i
 test('Hebrew: every fixed message in the source code has a translation (including rare ones the crawler misses)', async () => {
   const app = await loadApp({ storage: { 'mf.lang': 'he' } });
   try {
-    const js = HTML.slice(HTML.indexOf('<script>\n'));
+    const start = HTML.indexOf('<script>\n');
+    assert.ok(start > 0, 'could not find the app script');
+    const js = HTML.slice(start);
     const found = new Set(), add = t => { t = t.replace(/\s+/g, ' ').trim(); if (hasLatin(t)) found.add(t); };
     for (const m of js.matchAll(/>([^<>`${}\n]*[A-Za-z]{2,}[^<>`${}\n]*)</g)) add(m[1].replace(/&amp;/g, '&'));
     for (const m of js.matchAll(/(?:alert|confirm)\(\s*(['`"])((?:\\.|(?!\1).)*)\1/g)) if (!m[2].includes('${')) add(m[2].replace(/\\'/g, "'").replace(/\\n/g, ' '));
@@ -39,7 +41,8 @@ test('Hebrew: every fixed message in the source code has a translation (includin
     for (const m of js.matchAll(/placeholder="([^"$]*)"/g)) add(m[1]);
     // strings that are code, not text
     const ignore = s => /[(){};=]|=>|\.replace|Math\.|tr\(/.test(s) || s.length < 3;
-    const missing = [...found].filter(s => !ignore(s)).filter(s => app.ev(`tr(${JSON.stringify(s)})`) === s);
+    assert.ok(found.size > 60, `the scan should find many messages, but found only ${found.size}`);
+    const missing = [...found].filter(s => !ignore(s) && s !== 'English').filter(s => app.ev(`tr(${JSON.stringify(s)})`) === s);
     assert.deepEqual(missing, [], 'no Hebrew for:\n' + missing.join('\n'));
   } finally { await app.dispose(); }
 });
