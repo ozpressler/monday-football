@@ -5,7 +5,7 @@ Automated tests load the **real `index.html`** in a simulated browser (jsdom), c
 ## Run them
 ```bash
 npm install          # once
-npm test             # all automated tests (about 25 seconds)
+npm test             # all automated tests (about 30 seconds)
 npm run test:live    # optional: security checks against the REAL database (read-only, made-up group names)
 ```
 Run one file: `node --test tests/night-flow.test.js`.
@@ -20,6 +20,8 @@ Run one file: `node --test tests/night-flow.test.js`.
 | `stats-players.test.js` | stats table and sorting, period filters, awards, streaks, partners, player card, adding/editing/retiring/deleting players |
 | `settings-timer.test.js` | every setting and its limits, the game timer (start/pause/resume/reset), full time, extra time, goal minutes (record, edit, clear) |
 | `cloud.test.js` | sign-in, viewer vs admin, groups (create/rename/passwords), saving and conflicts, backups and restore, lock-out message, offline start-up |
+| `h2h.test.js` | head to head: records against and with each player (hand-computed), mirror symmetry, pair view, toughest/favourite opponent, period filter, substitutes counted |
+| `i18n.test.js` | Hebrew + right-to-left: a crawler visits every screen/message and fails if any English is left, language switching and persistence, sentence patterns, direction-neutral CSS, share-card drawing in both directions |
 | `sql.test.js` | SQL parses as valid PostgreSQL, null-password protection, helpers locked down, tables protected |
 | `live-db.test.js` | (optional) the real database refuses wrong/missing passwords, hides its tables, hides helper functions |
 | `smoke.test.js` | the app boots |
@@ -28,7 +30,7 @@ Run one file: `node --test tests/night-flow.test.js`.
 Anything that needs a real phone or human judgement: the buzzer sound, wake-lock, installing to the home screen, the share-card picture, layout on small screens, the feel of one-handed use at the pitch.
 
 ## Are the tests any good? Mutation check
-Tests were verified by deliberately breaking the app 14 ways (removing the player-count rule, ignoring win rate in grades, letting viewers edit, breaking undo, etc.) and checking the suite fails each time. All 14 are caught. If you change core logic and no test fails, add one.
+Tests were verified by deliberately breaking the app 21 ways (removing the player-count rule, ignoring win rate in grades, letting viewers edit, breaking undo, etc.) and checking the suite fails each time. All 21 are caught. If you change core logic and no test fails, add one.
 
 ## Writing a new test
 ```js
@@ -40,3 +42,7 @@ assert.match(app.text(), /…/);                     // read what's on screen
 app.ev('S.players.length');                        // peek at app state
 await app.dispose();
 ```
+
+## Developer tools
+- `node tests/crawl-dump.js` prints every piece of UI text the crawler sees (English mode). `node tests/crawl-dump.js he` prints only text still containing English while Hebrew is on: use it when adding a screen or message.
+- To add another language: add an entry to `I18N` in `index.html` (a dictionary of exact strings plus pattern rules), list it in the language selector, and copy `i18n.test.js`'s coverage tests.

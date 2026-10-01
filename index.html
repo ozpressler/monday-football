@@ -28,15 +28,16 @@ input[type=number]{width:70px}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
 nav button{flex:1;border:0;border-radius:0;background:none;padding:12px 2px;color:var(--mute);font-size:12px}
 nav button.on{color:var(--accent);font-weight:700}
+html[dir=rtl] nav button{font-size:11px;padding:12px 1px;white-space:nowrap}
 .dot{width:12px;height:12px;border-radius:50%;display:inline-block;flex:none}
-.pill{display:inline-block;background:var(--soft);border-radius:99px;padding:3px 10px;font-size:13px;margin:2px 4px 2px 0}
+.pill{display:inline-block;background:var(--soft);border-radius:99px;padding:3px 10px;font-size:13px;margin:2px 0;margin-inline-end:4px}
 .grid{display:grid;gap:8px}.g2{grid-template-columns:1fr 1fr}
-.pbtn{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;margin-bottom:6px}
+.pbtn{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:start;margin-bottom:6px}
 .score{font-size:40px;font-weight:800;text-align:center;letter-spacing:2px}
 .tabs{display:flex;gap:6px;margin-bottom:10px}.tabs button{flex:1}.tabs .on{background:var(--soft);border-color:var(--accent);font-weight:600}
 table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:8px 4px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
-th:first-child,td:first-child{text-align:left}th{color:var(--mute);font-weight:600;cursor:pointer;font-size:12px}
+th,td{padding:8px 4px;text-align:end;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:start}th{color:var(--mute);font-weight:600;cursor:pointer;font-size:12px}
 tr.clk{cursor:pointer}
 .grade{display:inline-block;min-width:38px;text-align:center;font-weight:700;background:var(--soft);border-radius:8px;padding:2px 6px}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:9}
@@ -198,8 +199,8 @@ function doLogout() {
 }
 function updateSub() {
   const el = document.getElementById('sub'); if (!el) return;
-  if (cloud.on && cloud.authed) el.textContent = (cloud.name ? cloud.name + ' · ' : '') + (RO() ? 'Viewing' : cloud.status === 'offline' ? 'Offline' : cloud.status === 'saving' ? 'Saving…' : cloud.status === 'error' ? '⚠ Not saved – retrying' : 'Saved ✓');
-  else el.textContent = activeNight() ? 'Night in progress' : `${finishedNights().length} nights logged`;
+  if (cloud.on && cloud.authed) el.textContent = (cloud.name ? cloud.name + ' · ' : '') + tr(RO() ? 'Viewing' : cloud.status === 'offline' ? 'Offline' : cloud.status === 'saving' ? 'Saving…' : cloud.status === 'error' ? '⚠ Not saved – retrying' : 'Saved ✓');
+  else el.textContent = tr(activeNight() ? 'Night in progress' : `${pl(finishedNights().length, 'night')} logged`);
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -349,6 +350,367 @@ const goalsSorted = m => m.goals.map((g, i) => [g, i]).sort((a, b) => (a[0].min 
 const ui = { h2h: { a: '', b: '' }, backups: null, range: 'all', installEvt: null, timer: null, tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
 
 try { ui.timer = JSON.parse(lsGet('mf.timer') || 'null'); } catch { }
+/* ---------- language (per device) ---------- */
+let LANG = lsGet('mf.lang') || (((navigator.language || '') + '').toLowerCase().startsWith('he') ? 'he' : 'en');
+const I18N = { he: { dict: {}, rules: [] } };
+
+const HEc = { Red: 'אדומה', Blue: 'כחולה', Yellow: 'צהובה', Green: 'ירוקה' }, hc = x => HEc[x] || x;
+const COL = '(Red|Blue|Yellow|Green)';
+const hpl = (n, one, many) => (+n === 1 ? one : `${n} ${many}`);
+const gm = n => hpl(n, 'משחק אחד', 'משחקים'), nt = n => hpl(n, 'ערב אחד', 'ערבים'), pp = n => hpl(n, 'שחקן אחד', 'שחקנים');
+const hWhy = w => {
+  let m;
+  if (w === 'first game') return 'משחק ראשון';
+  if ((m = w.match(new RegExp(`^${COL} won and stays on$`)))) return `${hc(m[1])} ניצחה ונשארת`;
+  if ((m = w.match(new RegExp(`^draw, ${COL} stays on \\(fewer games\\)$`)))) return `תיקו, ${hc(m[1])} נשארת (פחות משחקים)`;
+  if (w === 'the teams with the fewest games') return 'הקבוצות עם הכי פחות משחקים';
+  return w;
+};
+const HE_RULES = [
+  [/^(\d+) nights? logged$/, (_, n) => +n === 1 ? 'ערב אחד נרשם' : `${n} ערבים נרשמו`],
+  [/^(\d+) players?$/, (_, n) => pp(n)],
+  [/^(\d+) games?$/, (_, n) => gm(n)],
+  [/^Tonight · (.+)$/, (_, d) => `הערב · ${d}`],
+  [/^Game (\d+)( ✓| · in progress)?$/, (_, n, st) => `משחק ${n}${st === ' ✓' ? ' ✓' : st ? ' · בעיצומו' : ''}`],
+  [new RegExp(`^${COL} (\\d+) – (\\d+) ${COL}$`), (_, a, x, y, b) => `${hc(a)} ${x} – ${y} ${hc(b)}`],
+  [new RegExp(`^Suggested: ${COL} vs ${COL} \\((.+)\\)$`), (_, a, b, why) => `מוצע: ${hc(a)} נגד ${hc(b)} (${hWhy(why)})`],
+  [/^(\d+) here\. You need exactly (\d+) \((\d+) teams of (\d+)\): (?:add (\d+) more|untick (\d+))\.$/, (_, h, need, k, per, add, un) => `${h} כאן. נדרשים בדיוק ${need} (${k} קבוצות של ${per}): ${add ? `הוסיפו עוד ${add}` : `בטלו סימון של ${un}`}.`],
+  [/^(\d+) here\. You need at least (\d+) \((\d+) teams of (\d+)\): add (\d+) more\.$/, (_, h, need, k, per, add) => `${h} כאן. נדרשים לפחות ${need} (${k} קבוצות של ${per}): הוסיפו עוד ${add}.`],
+  [/^(\d+) here\. Put exactly (\d+) players on each team, or tap Auto-balance\.$/, (_, h, n) => `${h} כאן. שבצו בדיוק ${n} שחקנים בכל קבוצה, או הקישו על איזון אוטומטי.`],
+  [/^(\d+) here · (\d+) teams of (\d+) ✓(?: · (\d+) on the bench)?$/, (_, h, k, per, b) => `${h} כאן · ${k} קבוצות של ${per} ✓${b ? ` · ${b} על הספסל` : ''}`],
+  [/^\((\d+)\) tap a colour( to put on a team)?$/, (_, n, t) => `(${n}) ${t ? 'הקישו על צבע כדי לשבץ בקבוצה' : 'הקישו על צבע'}`],
+  [/^Each team needs exactly (\d+) players\.$/, (_, n) => `כל קבוצה צריכה בדיוק ${n} שחקנים.`],
+  [/^You need (exactly|at least) (\d+) players \((\d+) teams of (\d+)\)( to start)?\.$/, (_, w, n, k, per, st) => `נדרשים ${w === 'exactly' ? 'בדיוק' : 'לפחות'} ${n} שחקנים (${k} קבוצות של ${per})${st ? ' כדי להתחיל' : ''}.`],
+  [/^⚽ (.+) scored(?: · assist (.+))?$/, (_, n, a) => `⚽ שער של ${n}${a ? ` · בישול: ${a}` : ''}`],
+  [/^⚽ (?:(\d+)' )?(.+?) \(assist (.+)\)$/, (_, m, n, a) => `⚽ ${m ? m + "' " : ''}${n} (בישול: ${a})`],
+  [/^(.+) scored$/, (_, n) => `שער של ${n}`],
+  [/^\(assist (.+)\)$/, (_, a) => `(בישול: ${a})`],
+  [/^\+ (\d+) min extra time$/, (_, n) => `+ ${n} דקות הארכה`],
+  [/^Who comes on for (.+)\?$/, (_, n) => `מי נכנס במקום ${n}?`],
+  [/^Finish the night \((\d+) games?\) and update grades\?$/, (_, n) => `לסיים את הערב (${gm(n)}) ולעדכן ציונים?`],
+  [/^(.+) against$/, (_, n) => `${n} מול אחרים`],
+  [/^(.+) with$/, (_, n) => `${n} עם חברים לקבוצה`],
+  [/^Wins, draws and losses are from (.+)'s point of view\. Pick a second player to compare two people directly\.$/, (_, n) => `ניצחונות, תיקו והפסדים מנקודת המבט של ${n}. בחרו שחקן שני כדי להשוות ישירות בין שניים.`],
+  [/^(\d+) games? against each other · goals (\d+)–(\d+)$/, (_, n, a, b) => `${gm(n)} אחד נגד השני · שערים ${a}–${b}`],
+  [/^win rate · (\d+) games? · (\d+-\d+-\d+)$/, (_, n, r) => `אחוז ניצחון · ${gm(n)} · ${r}`],
+  [/^Form \(last (\d+) games?\)$/, (_, n) => +n === 1 ? 'כושר (המשחק האחרון)' : `כושר (${n} משחקים אחרונים)`],
+  [/^(?:(🔥) (\d+) wins in a row · |(🥶) (\d+) losses in a row · )?Best win streak: (\d+)( · Wins most with)?$/, (_, f, w, c, l, best, wm) => `${f ? `🔥 ${w} ניצחונות ברצף · ` : c ? `🥶 ${l} הפסדים ברצף · ` : ''}רצף הניצחונות הטוב ביותר: ${best}${wm ? ' · מנצחים הכי הרבה עם' : ''}`],
+  [/^\((\d+)% in (\d+) games\)$/, (_, p, n) => `(${p}% ב-${n} משחקים)`],
+  [/^\((\d+)% · (\d+) games\)$/, (_, p, n) => `(${p}% · ${n} משחקים)`],
+  [/^(\d+) wins$/, (_, n) => `${n} ניצחונות`],
+  [/^(\d+) losses$/, (_, n) => `${n} הפסדים`],
+  [/^Group: (.+)$/, (_, n) => `חבורה: ${n}`],
+  [/^Rename the group to "(.+)"\?$/, (_, n) => `לשנות את שם החבורה ל-"${n}"?`],
+  [/^Permanently delete (.+)\?$/, (_, n) => `למחוק את ${n} לצמיתות?`],
+  [/^Their name, grade and stats are removed \((\d+) games? played\)\. Game scores stay the same, but their goals and assists show as "unknown"\. You can restore a backup afterwards\.$/, (_, n) => `השם, הציון והסטטיסטיקות שלהם יימחקו (${gm(n)} שוחקו). תוצאות המשחקים נשארות, אך השערים והבישולים שלהם יוצגו כ"לא ידוע". אפשר לשחזר גיבוי אחר כך.`],
+  [/^(.+) · (\d+) players?, (\d+) nights?$/, (_, label, p, n) => `${tr(label)} · ${pp(p)}, ${nt(n)}`],
+  [/^After night (.+)$/, (_, d) => `אחרי ערב ${d}`],
+  [/^Before deleting (.+)$/, (_, n) => `לפני מחיקת ${n}`],
+  [/^⭐ Star of the night: (.+) \((\d+) goals?\)$/, (_, n, k) => `⭐ כוכב הערב: ${n} (${+k === 1 ? 'שער אחד' : k + ' שערים'})`],
+  [/^Format: (.+) · used as the default when setting up a night$/, (_, f) => `פורמט: ${f.replace(/ vs /g, ' נגד ')} · משמש כברירת מחדל בהכנת ערב`],
+  [/^(Grade|GP|Win%|G|A|G\+A|G\+A\/gm|Player) ([▾▴])$/, (_, h, a) => `${tr(h)} ${a}`],
+];
+
+I18N.he = { dict: {
+ "⚽ Monday Night Football": "⚽ כדורגל ליל שני",
+ "Monday Night Football": "כדורגל ליל שני",
+ "⚽ Night": "⚽ ערב",
+ "📊 Stats": "📊 סטטיסטיקה",
+ "👥 Players": "👥 שחקנים",
+ "💾 Data": "💾 נתונים",
+ "⚙️ Settings": "⚙️ הגדרות",
+ "⚽ Tonight": "⚽ הערב",
+ "👤 Account": "👤 חשבון",
+ "Red": "אדומה",
+ "Blue": "כחולה",
+ "Yellow": "צהובה",
+ "Green": "ירוקה",
+ "No night in progress": "אין ערב פעיל",
+ "Pick who showed up, build balanced teams, then log the games.": "בחרו מי הגיע, צרו קבוצות מאוזנות ורשמו את המשחקים.",
+ "Start Monday night": "התחל ערב יום שני",
+ "Tip: add your players in the Players tab first.": "טיפ: הוסיפו קודם את השחקנים בלשונית שחקנים.",
+ "Night in progress": "ערב בעיצומו",
+ "Edit teams": "עריכת קבוצות",
+ "Games": "משחקים",
+ "vs": "נגד",
+ "Start game": "התחל משחק",
+ "No games yet": "עדיין אין משחקים",
+ "Discard night": "בטל ערב",
+ "Finish night & update grades": "סיים ערב ועדכן ציונים",
+ "Bench": "ספסל",
+ "(can be swapped in during a game)": "(אפשר להחליף פנימה במהלך משחק)",
+ "When a game night is being logged it shows up here live.": "כשערב משחקים נרשם, הוא יופיע כאן בשידור חי.",
+ "Updates automatically every few seconds.": "מתעדכן אוטומטית כל כמה שניות.",
+ "Discard tonight completely? All games will be lost.": "לבטל את הערב לחלוטין? כל המשחקים יימחקו.",
+ "Finish or discard tonight's night first.": "סיימו או בטלו קודם את הערב הנוכחי.",
+ "Set up tonight": "הכנת הערב",
+ "Who's here tonight?": "מי כאן הערב?",
+ "Cancel": "ביטול",
+ "Date": "תאריך",
+ "Teams": "קבוצות",
+ "🎲 Auto-balance": "🎲 איזון אוטומטי",
+ "Start night": "התחל ערב",
+ "Save teams": "שמור קבוצות",
+ "Tick all regulars": "סמן את כל הקבועים",
+ "⭐ Regulars": "⭐ קבועים",
+ "Others": "אחרים",
+ "Not here": "לא כאן",
+ "New player name": "שם שחקן חדש",
+ "Add": "הוסף",
+ "Here, no team yet": "כאן, ללא קבוצה",
+ "Everyone is here 🎉": "כולם כאן 🎉",
+ "No players yet. Add them below or in the Players tab.": "עדיין אין שחקנים. הוסיפו אותם למטה או בלשונית שחקנים.",
+ "avg grade": "ציון ממוצע",
+ "Pick two different teams.": "בחרו שתי קבוצות שונות.",
+ "Some players are not on a team yet. Tap a colour for each player, or use Auto-balance.": "חלק מהשחקנים עדיין ללא קבוצה. הקישו על צבע לכל שחקן, או השתמשו באיזון אוטומטי.",
+ "You need at least two teams with players.": "נדרשות לפחות שתי קבוצות עם שחקנים.",
+ "← Back": "→ חזרה",
+ "Delete game": "מחק משחק",
+ "Reset": "איפוס",
+ "Save game": "שמור משחק",
+ "✓ Saved · Back to night": "✓ נשמר · חזרה לערב",
+ "Tap the scorer, then choose the assist": "הקישו על המבקיע ואז בחרו את המבשל",
+ "Own goal / unknown": "שער עצמי / לא ידוע",
+ "⚽ Own goal / unknown": "⚽ שער עצמי / לא ידוע",
+ "Goals": "שערים",
+ "No goals yet": "עדיין אין שערים",
+ "Pause": "השהה",
+ "Resume": "המשך",
+ "Start": "התחל",
+ "Full time": "סיום המשחק",
+ "Full time (after extra time)": "סיום המשחק (אחרי הארכה)",
+ "Extra time": "הארכה",
+ "Assist by?": "מי בישל?",
+ "No assist": "ללא בישול",
+ "Goal": "שער",
+ "⚽ Goal scored": "⚽ הובקע שער",
+ "Undo": "בטל",
+ "Edit time": "עריכת זמן",
+ "Time of goal": "זמן השער",
+ "minute": "דקה",
+ "No time": "ללא זמן",
+ "Save": "שמור",
+ "Delete this game?": "למחוק את המשחק?",
+ "🔁 Substitute": "🔁 חילוף",
+ "Who comes off?": "מי יוצא?",
+ "Substitutions": "חילופים",
+ "Nobody else is available tonight.": "אין עוד שחקנים זמינים הערב.",
+ "Night saved ✅": "הערב נשמר ✅",
+ "Grades updated:": "הציונים עודכנו:",
+ "Share result card": "שתף כרטיס תוצאות",
+ "Done": "סיום",
+ "No changes": "אין שינויים",
+ "No goals": "אין שערים",
+ "Players": "שחקנים",
+ "Awards": "פרסים",
+ "Head to head": "ראש בראש",
+ "Nights": "ערבים",
+ "All time": "כל הזמנים",
+ "Last 30 days": "30 הימים האחרונים",
+ "Last 10 nights": "10 הערבים האחרונים",
+ "No games in this period.": "אין משחקים בתקופה זו.",
+ "Player": "שחקן",
+ "Grade": "ציון",
+ "GP": "מש'",
+ "Win%": "נצ%",
+ "G": "ש",
+ "A": "ב",
+ "G+A": "ש+ב",
+ "G+A/gm": "ש+ב/מש'",
+ "Grade is always all-time. The other columns follow the period above. Win% counts a draw as half a win. Tap a player for details.": "הציון תמיד מכל הזמנים. שאר העמודות לפי התקופה שלמעלה. אחוז הניצחון סופר תיקו כחצי ניצחון. הקישו על שחקן לפרטים.",
+ "Finish a night to see awards.": "סיימו ערב כדי לראות פרסים.",
+ "🥇 Top scorers": "🥇 מלכי השערים",
+ "🎯 Top assisters": "🎯 מלכי הבישולים",
+ "🔥 Goal involvements per game": "🔥 מעורבות בשערים למשחק",
+ "🏆 Best win rate (6+ games)": "🏆 אחוז ניצחון הטוב ביותר (6+ משחקים)",
+ "🛡️ Best goal difference per game (6+ games)": "🛡️ הפרש שערים הטוב ביותר למשחק (6+ משחקים)",
+ "📅 Most nights played": "📅 הכי הרבה ערבים",
+ "⭐ Highest grades": "⭐ הציונים הגבוהים ביותר",
+ "📈 Most improved (last 3 nights)": "📈 ההשתפרות הגדולה (3 ערבים אחרונים)",
+ "⚡ Longest win streaks": "⚡ רצפי הניצחונות הארוכים",
+ "🔥 On a winning streak now": "🔥 ברצף ניצחונות כרגע",
+ "🥶 Longest losing streaks": "🥶 רצפי ההפסדים הארוכים",
+ "Goals per night": "שערים בכל ערב",
+ "Goals + assists": "שערים + בישולים",
+ "(goals · assists)": "(שערים · בישולים)",
+ "All players": "כל השחקנים",
+ "Opponent": "יריב",
+ "W": "נ",
+ "D": "ת",
+ "L": "ה",
+ "GD": "הפרש",
+ "Teammate": "חבר קבוצה",
+ "W-D-L": "נ-ת-ה",
+ "Win %": "% ניצחון",
+ "Add at least two players.": "הוסיפו לפחות שני שחקנים.",
+ "Finish a night to see head to head.": "סיימו ערב כדי לראות ראש בראש.",
+ "Against each other": "אחד מול השני",
+ "wins": "ניצחונות",
+ "draws": "תיקו",
+ "On the same team": "באותה קבוצה",
+ "Never played against each other.": "מעולם לא שיחקו אחד נגד השני.",
+ "Never played on the same team.": "מעולם לא שיחקו באותה קבוצה.",
+ "No games against others yet.": "עדיין אין משחקים מול אחרים.",
+ "No games with teammates yet.": "עדיין אין משחקים עם חברים לקבוצה.",
+ "Share": "שתף",
+ "Reopen": "פתח מחדש",
+ "No finished nights yet": "עדיין אין ערבים שהסתיימו",
+ "Assists": "בישולים",
+ "Goal diff": "הפרש שערים",
+ "Grade over time": "הציון לאורך זמן",
+ "Close": "סגור",
+ "Toughest opponent": "היריב הקשה ביותר",
+ "Favourite opponent": "היריב החביב",
+ "Add many at once": "הוספה מרובה",
+ "Add all": "הוסף את כולם",
+ "Player name": "שם שחקן",
+ "One name per line (or comma separated)": "שם בכל שורה (או מופרדים בפסיקים)",
+ "Starting grade is used until a player has games logged. \"Adjust\" manually nudges the final grade up or down.": "ציון ההתחלה משמש עד שנרשמים לשחקן משחקים. \"התאמה\" מעלה או מורידה ידנית את הציון הסופי.",
+ "⭐ Regular": "⭐ קבוע",
+ "Start grade": "ציון התחלה",
+ "Adjust": "התאמה",
+ "Retire": "ארכיון",
+ "Delete": "מחק",
+ "Restore": "שחזר",
+ "Add your first players above": "הוסיפו את השחקנים הראשונים למעלה",
+ "Tip: \"Retire\" hides a player but keeps their history.": "טיפ: \"ארכיון\" מסתיר שחקן אך שומר את ההיסטוריה שלו.",
+ "Backup": "גיבוי",
+ "All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.": "כל הנתונים שמורים במכשיר זה בלבד. ייצאו גיבוי באופן קבוע, ואפשר להשתמש בו כדי להעביר נתונים לטלפון אחר.",
+ "Data is stored in the shared database. A backup file is still a good safety copy.": "הנתונים שמורים במסד הנתונים המשותף. קובץ גיבוי עדיין מהווה עותק ביטחון טוב.",
+ "Export backup": "ייצוא גיבוי",
+ "Import backup": "ייבוא גיבוי",
+ "Replace current data with this backup?": "להחליף את הנתונים הנוכחיים בגיבוי הזה?",
+ "That file is not a valid backup.": "הקובץ אינו גיבוי תקין.",
+ "Language": "שפה",
+ "English": "English",
+ "Applies to this device only.": "חל על מכשיר זה בלבד.",
+ "Game": "משחק",
+ "Game length (minutes)": "משך משחק (דקות)",
+ "Extra time (minutes)": "משך הארכה (דקות)",
+ "Set to 0 to turn extra time off": "הגדירו 0 כדי לבטל הארכה",
+ "Offer extra time when tied": "הצע הארכה בתיקו",
+ "Shown at full time if the score is level": "מוצג בסיום המשחק אם התוצאה שווה",
+ "Sound & vibration at full time": "צליל ורטט בסיום המשחק",
+ "Number of teams": "מספר קבוצות",
+ "Players per team": "שחקנים בקבוצה",
+ "For example 5 means 5 vs 5": "למשל 5 פירושו 5 נגד 5",
+ "Allow substitutes (bench)": "אפשר חילופים (ספסל)",
+ "Off: you need exactly teams × players per team. On: extra players wait on a bench and can be swapped in during a game.": "כבוי: נדרש בדיוק מספר קבוצות × שחקנים בקבוצה. פעיל: שחקנים נוספים ממתינים על הספסל ואפשר להחליף אותם פנימה במהלך משחק.",
+ "Reset settings to defaults": "איפוס הגדרות לברירת המחדל",
+ "How grades work": "איך הציונים עובדים",
+ "Each player's grade (1–10) blends their win rate, goals + assists per game, and the goal difference of their teams, using recent nights more than old ones. New players lean on their starting grade until they have enough games. Grades update when you finish a night.": "ציון כל שחקן (1–10) משלב את אחוז הניצחונות שלו, שערים + בישולים למשחק, והפרש השערים של הקבוצות שלו, כשערבים אחרונים נחשבים יותר מישנים. שחקנים חדשים נשענים על ציון ההתחלה עד שיש להם מספיק משחקים. הציונים מתעדכנים כשמסיימים ערב.",
+ "Test data": "נתוני בדיקה",
+ "Demo data is for trying the app out. Use \"Delete all data\" to clear it before your real games.": "נתוני הדגמה נועדו לנסות את האפליקציה. השתמשו ב\"מחיקת כל הנתונים\" כדי לנקות אותם לפני המשחקים האמיתיים.",
+ "Load demo data": "טען נתוני הדגמה",
+ "Delete all data": "מחק את כל הנתונים",
+ "This REPLACES all current data with demo data (20 players, 6 nights). Continue?": "פעולה זו מחליפה את כל הנתונים הנוכחיים בנתוני הדגמה (20 שחקנים, 6 ערבים). להמשיך?",
+ "Delete ALL players and games?": "למחוק את כל השחקנים והמשחקים?",
+ "Really delete everything? (A backup is saved first when you are online.)": "למחוק הכול באמת? (גיבוי נשמר קודם כשיש חיבור.)",
+ "Could not save data (storage full or blocked).": "לא ניתן לשמור נתונים (האחסון מלא או חסום).",
+ "Automatic backups": "גיבויים אוטומטיים",
+ "A copy is saved after every finished night and before anything is deleted. The latest 25 are kept.": "עותק נשמר אחרי כל ערב שהסתיים ולפני כל מחיקה. נשמרים 25 האחרונים.",
+ "Back up now": "גבה עכשיו",
+ "Loading…": "טוען…",
+ "No backups yet.": "עדיין אין גיבויים.",
+ "Backups need the latest database update (run supabase-update.sql in Supabase).": "הגיבויים דורשים את עדכון מסד הנתונים האחרון (הריצו את supabase-update.sql ב-Supabase).",
+ "Manual backup": "גיבוי ידני",
+ "Before loading demo data": "לפני טעינת נתוני הדגמה",
+ "Before deleting all data": "לפני מחיקת כל הנתונים",
+ "Before discarding a night": "לפני ביטול ערב",
+ "Before importing a file": "לפני ייבוא קובץ",
+ "Before restoring a backup": "לפני שחזור גיבוי",
+ "Restore this backup?": "לשחזר את הגיבוי הזה?",
+ "Current data will be replaced (a backup of it is saved first).": "הנתונים הנוכחיים יוחלפו (גיבוי שלהם נשמר קודם).",
+ "Backup restored.": "הגיבוי שוחזר.",
+ "Could not load that backup.": "לא ניתן לטעון את הגיבוי.",
+ "You are signed in as admin. Changes save to the shared database automatically.": "אתם מחוברים כמנהל. שינויים נשמרים אוטומטית במסד הנתונים המשותף.",
+ "You are signed in as a viewer.": "אתם מחוברים כצופים.",
+ "Rename": "שינוי שם",
+ "Change passwords": "שינוי סיסמאות",
+ "New viewer password (empty = keep)": "סיסמת צפייה חדשה (ריק = ללא שינוי)",
+ "New admin password (empty = keep)": "סיסמת מנהל חדשה (ריק = ללא שינוי)",
+ "Sign out": "התנתקות",
+ "Type a new viewer and/or admin password first.": "הקלידו קודם סיסמת צפייה ו/או סיסמת מנהל חדשה.",
+ "Passwords must be at least 4 characters.": "הסיסמאות חייבות להכיל לפחות 4 תווים.",
+ "Change the password(s)?": "לשנות את הסיסמה/ות?",
+ "People signed in with the old viewer password will need the new one.": "מי שהתחבר עם סיסמת הצפייה הישנה יצטרך את החדשה.",
+ "The viewer and admin passwords must be different.": "סיסמת הצפייה וסיסמת המנהל חייבות להיות שונות.",
+ "Passwords changed.": "הסיסמאות שונו.",
+ "Could not change the passwords.": "לא ניתן לשנות את הסיסמאות.",
+ "The database needs updating first. Run supabase-update.sql in Supabase.": "צריך קודם לעדכן את מסד הנתונים. הריצו את supabase-update.sql ב-Supabase.",
+ "The group name must be 2 to 40 characters.": "שם החבורה חייב להכיל 2 עד 40 תווים.",
+ "Everyone must use the new name to sign in from now on.": "מעכשיו כולם צריכים להשתמש בשם החדש כדי להתחבר.",
+ "Could not rename the group.": "לא ניתן לשנות את שם החבורה.",
+ "That group name is already taken.": "שם החבורה כבר תפוס.",
+ "Sign out on this device?": "להתנתק ממכשיר זה?",
+ "Can't reach the server. Check your connection and try again.": "אין חיבור לשרת. בדקו את החיבור ונסו שוב.",
+ "Another device saved newer data, so the latest version was loaded. Please redo your last change.": "מכשיר אחר שמר נתונים חדשים יותר, ולכן נטענה הגרסה העדכנית. אנא בצעו שוב את השינוי האחרון.",
+ "Sign in": "התחברות",
+ "Enter your group name and its password. Use the admin password to edit, or the viewer password to just look.": "הזינו את שם החבורה והסיסמה שלה. סיסמת מנהל מאפשרת עריכה, סיסמת צפייה מאפשרת רק לצפות.",
+ "Group name": "שם החבורה",
+ "Password": "סיסמה",
+ "Create a new group": "יצירת חבורה חדשה",
+ "Open": "כניסה",
+ "Group name or password is not right.": "שם החבורה או הסיסמה שגויים.",
+ "Too many wrong attempts. Try again in a few minutes.": "יותר מדי ניסיונות שגויים. נסו שוב בעוד כמה דקות.",
+ "Create a group": "יצירת חבורה",
+ "Pick a group name and two passwords: the admin password lets you edit, the viewer password is for friends who just look.": "בחרו שם חבורה ושתי סיסמאות: סיסמת המנהל מאפשרת עריכה, סיסמת הצפייה לחברים שרק רוצים לצפות.",
+ "Back": "חזרה",
+ "Create group": "צור חבורה",
+ "Admin password (to edit)": "סיסמת מנהל (לעריכה)",
+ "Repeat admin password": "חזרו על סיסמת המנהל",
+ "Viewer password (view only)": "סיסמת צפייה (לצפייה בלבד)",
+ "Creation code (from the site owner)": "קוד יצירה (מבעל האתר)",
+ "Group name must be at least 2 characters.": "שם החבורה חייב להכיל לפחות 2 תווים.",
+ "The two admin passwords do not match.": "שתי סיסמאות המנהל אינן זהות.",
+ "Admin and viewer passwords must be different.": "סיסמת המנהל וסיסמת הצפייה חייבות להיות שונות.",
+ "Wrong creation code.": "קוד יצירה שגוי.",
+ "Could not create the group. Check the name and passwords.": "לא ניתן ליצור את החבורה. בדקו את השם והסיסמאות.",
+ "Too many wrong creation codes. Try again in a few minutes.": "יותר מדי קודי יצירה שגויים. נסו שוב בעוד כמה דקות.",
+ "Saved ✓": "נשמר ✓",
+ "Saving…": "שומר…",
+ "⚠ Not saved – retrying": "⚠ לא נשמר – מנסה שוב",
+ "Offline": "לא מחובר",
+ "Viewing": "צפייה",
+ "📲 To install: tap Share, then “Add to Home Screen”": "📲 להתקנה: הקישו על שיתוף ואז \"הוספה למסך הבית\"",
+ "📲 Install this app on your phone": "📲 התקינו את האפליקציה בטלפון",
+ "Install": "התקן",
+ "Everyone is here": "כולם כאן"
+}, rules: HE_RULES };
+
+if (!I18N[LANG]) LANG = 'en';
+function tr(s) {
+  if (LANG === 'en' || s == null || s === '') return s;
+  const m = String(s).match(/^(\s*)([\s\S]*?)(\s*)$/), core = m[2].replace(/\s+/g, ' ');
+  if (!core) return s;
+  const L = I18N[LANG];
+  let out = L.dict[core];
+  if (out === undefined) for (const [re, f] of L.rules) { const mm = core.match(re); if (mm) { out = typeof f === 'function' ? f(...mm) : core.replace(re, f); break; } }
+  return out === undefined ? s : m[1] + out + m[3];
+}
+const trMsg = m => LANG === 'en' ? m : String(m).split('\n').map(tr).join('\n');
+function translateTree(root) {
+  if (LANG === 'en' || !root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(n => {
+    const p = n.parentNode;
+    if (!p || p.tagName === 'SCRIPT' || p.tagName === 'STYLE' || (p.closest && p.closest('[data-nt]'))) return;
+    const v = tr(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v;
+  });
+  root.querySelectorAll('[placeholder],[title]').forEach(el => ['placeholder', 'title'].forEach(a => { if (el.hasAttribute(a)) el.setAttribute(a, tr(el.getAttribute(a))); }));
+}
+function applyLang() {
+  document.documentElement.lang = LANG; document.documentElement.dir = LANG === 'he' ? 'rtl' : 'ltr';
+  document.title = tr('Monday Night Football');
+  const h = document.querySelector('header h1'); if (h) h.textContent = tr('⚽ Monday Night Football');
+}
+function setLang(l) { if (!I18N[l] && l !== 'en') return; LANG = l; lsSet('mf.lang', l); applyLang(); render(); }
+const _alert = window.alert.bind(window), _confirm = window.confirm.bind(window);
+window.alert = m => _alert(trMsg(m));
+window.confirm = m => _confirm(trMsg(m));
+const langCard = () => `<div class="card"><b>Language</b><div class="row" style="margin-top:8px"><select data-c="lang"><option value="en" ${LANG === 'en' ? 'selected' : ''}>English</option><option value="he" ${LANG === 'he' ? 'selected' : ''}>עברית</option></select></div><p class="mute" style="margin-bottom:0">Applies to this device only.</p></div>`;
+const langToggle = () => `<div style="text-align:center;margin-top:14px"><button class="sm" data-a="setLang" data-l="${LANG === 'he' ? 'en' : 'he'}">${LANG === 'he' ? 'English' : 'עברית'}</button></div>`;
 const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone;
 function installBanner() {
   if (isStandalone() || lsGet('mf.hint')) return '';
@@ -357,7 +719,8 @@ function installBanner() {
   return '';
 }
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); ui.installEvt = e; render(); });
-function render() {
+function render() { renderEn(); if (LANG !== 'en') { ['nav', 'app', 'ov'].forEach(id => translateTree(document.getElementById(id))); } }
+function renderEn() {
   if (cloud.on && !cloud.authed) {
     document.getElementById('nav').innerHTML = ''; document.getElementById('ov').innerHTML = '';
     const err = cloud.err ? `<p class="down">${esc(cloud.err)}</p>` : '';
@@ -374,6 +737,7 @@ function render() {
           <p class="mute">Enter your group name and its password. Use the admin password to edit, or the viewer password to just look.</p>
           <div class="grid"><input id="grp" placeholder="Group name" autocomplete="off" value="${esc(cloud.group || '')}"><input id="code" type="password" placeholder="Password" autocomplete="current-password"></div>
           ${err}<div class="row" style="margin-top:10px"><button data-a="showCreate">Create a new group</button><span class="sp"></span><button class="pri" data-a="login">Open</button></div></div>`;
+    document.getElementById('app').insertAdjacentHTML('beforeend', langToggle());
     return updateSub();
   }
   const nav = RO() ? [['night', '⚽ Tonight'], ['stats', '📊 Stats'], ['data', '👤 Account']] : [['night', '⚽ Night'], ['stats', '📊 Stats'], ['players', '👥 Players'], ['data', '💾 Data'], ['settings', '⚙️ Settings']];
@@ -493,7 +857,7 @@ function viewSetup() {
     const ids = present.filter(p => d.assign[p.id] === i).sort(byGrade);
     if (!ids.length) return '';
     const avg = ids.reduce((s, p) => s + G[p.id].grade, 0) / ids.length;
-    return `<div class="card" style="border-left:6px solid ${COLORS[i].c}"><div class="row" style="margin-bottom:4px"><span class="dot" style="background:${COLORS[i].c}"></span><b>${COLORS[i].n}</b>
+    return `<div class="card" style="border-inline-start:6px solid ${COLORS[i].c}"><div class="row" style="margin-bottom:4px"><span class="dot" style="background:${COLORS[i].c}"></span><b>${COLORS[i].n}</b>
       <span class="mute">${ids.length} players</span><span class="sp"></span><span class="mute">avg grade</span><b>${avg.toFixed(2)}</b></div>${ids.map(row).join('')}</div>`;
   }).join('');
 
@@ -542,22 +906,23 @@ async function nightCardBlob(n) {
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const x = cv.getContext('2d');
   x.fillStyle = '#0f7b3f'; x.fillRect(0, 0, W, H);
   x.fillStyle = '#fff'; x.textBaseline = 'alphabetic';
-  x.font = '700 58px system-ui, sans-serif'; x.fillText('⚽ Monday Night Football', pad, 100);
-  x.font = '400 36px system-ui, sans-serif'; x.globalAlpha = .85; x.fillText((cloud.name ? cloud.name + ' · ' : '') + n.date, pad, 152); x.globalAlpha = 1;
+  const rtl = LANG === 'he', ax = rtl ? W - pad : pad; if (rtl) { x.direction = 'rtl'; x.textAlign = 'right'; }
+  x.font = '700 58px system-ui, sans-serif'; x.fillText(tr('⚽ Monday Night Football'), ax, 100);
+  x.font = '400 36px system-ui, sans-serif'; x.globalAlpha = .85; x.fillText((cloud.name ? cloud.name + ' · ' : '') + n.date, ax, 152); x.globalAlpha = 1;
   const fit = (t, w) => { while (x.measureText(t).width > w && t.length > 3) t = t.slice(0, -2); return t; };
   ms.forEach((m, i) => {
     const y = 190 + i * rowH, ta = teamOf(n, m.a), tb = teamOf(n, m.b); if (!ta || !tb) return;
     x.fillStyle = 'rgba(255,255,255,.96)'; x.beginPath(); x.roundRect ? x.roundRect(pad, y, W - 2 * pad, rowH - 18, 22) : x.rect(pad, y, W - 2 * pad, rowH - 18); x.fill();
-    x.fillStyle = ta.color; x.beginPath(); x.arc(pad + 40, y + 48, 16, 0, 7); x.fill();
-    x.fillStyle = tb.color; x.beginPath(); x.arc(W - pad - 40, y + 48, 16, 0, 7); x.fill();
+    x.fillStyle = ta.color; x.beginPath(); x.arc(rtl ? W - pad - 40 : pad + 40, y + 48, 16, 0, 7); x.fill();
+    x.fillStyle = tb.color; x.beginPath(); x.arc(rtl ? pad + 40 : W - pad - 40, y + 48, 16, 0, 7); x.fill();
     x.fillStyle = '#16211b'; x.font = '700 44px system-ui, sans-serif'; x.textAlign = 'center';
-    x.fillText(`${ta.name}  ${score(m, m.a)} – ${score(m, m.b)}  ${tb.name}`, W / 2, y + 62);
-    x.font = '400 28px system-ui, sans-serif'; x.fillStyle = '#56645c'; x.fillText(fit(scorers(m) || 'No goals', W - 2 * pad - 60), W / 2, y + 108);
-    x.textAlign = 'left';
+    x.fillText(`${tr(ta.name)}  ${score(m, m.a)} – ${score(m, m.b)}  ${tr(tb.name)}`, W / 2, y + 62);
+    x.font = '400 28px system-ui, sans-serif'; x.fillStyle = '#56645c'; x.fillText(fit(scorers(m) || tr('No goals'), W - 2 * pad - 60), W / 2, y + 108);
+    x.textAlign = rtl ? 'right' : 'left';
   });
   if (star) {
     const y = 190 + ms.length * rowH + 20; x.fillStyle = '#fff'; x.font = '600 38px system-ui, sans-serif';
-    x.fillText(`⭐ Star of the night: ${P(star[0]).name} (${Math.floor(star[1])} goal${Math.floor(star[1]) === 1 ? '' : 's'})`, pad, y + 40);
+    x.fillText(tr(`⭐ Star of the night: ${P(star[0]).name} (${Math.floor(star[1])} goal${Math.floor(star[1]) === 1 ? '' : 's'})`), ax, y + 40);
   }
   return new Promise(res => cv.toBlob(res, 'image/png'));
 }
@@ -643,7 +1008,7 @@ function chartsHtml(nights, R, ps) {
   const tops = ps.map(p => ({ p, g: R[p.id].g, a: R[p.id].a })).filter(x => x.g + x.a > 0).sort((x, y) => (y.g + y.a) - (x.g + x.a)).slice(0, 6);
   const mx2 = Math.max(...tops.map(x => x.g + x.a), 1);
   const hb = tops.map(x => `<div class="row" style="padding:3px 0"><span style="width:70px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.p.name)}</span>
-      <div class="sp" style="display:flex;height:16px"><div style="width:${x.g / mx2 * 100}%;background:var(--accent);border-radius:4px 0 0 4px"></div><div style="width:${x.a / mx2 * 100}%;background:var(--mute);opacity:.6;border-radius:0 4px 4px 0"></div></div><span class="mute" style="width:52px;text-align:right">${x.g}+${x.a}</span></div>`).join('');
+      <div class="sp" style="display:flex;height:16px"><div style="width:${x.g / mx2 * 100}%;background:var(--accent);border-radius:4px 0 0 4px"></div><div style="width:${x.a / mx2 * 100}%;background:var(--mute);opacity:.6;border-radius:0 4px 4px 0"></div></div><span class="mute" style="width:52px;text-align:end">${x.g}+${x.a}</span></div>`).join('');
   return `<div class="card"><b>Goals per night</b><svg viewBox="0 0 ${W} ${H}" width="100%">${bars}</svg></div>
     ${tops.length ? `<div class="card"><b>Goals + assists</b> <span class="mute">(goals · assists)</span>${hb}</div>` : ''}`;
 }
@@ -722,7 +1087,7 @@ function viewPlayers() {
     <p class="mute">Starting grade is used until a player has games logged. "Adjust" manually nudges the final grade up or down.</p>
     ${list.map(p => `<div class="card" style="${p.inactive ? 'opacity:.55' : ''}"><div class="row"><input value="${esc(p.name)}" data-c="pname" data-p="${p.id}" class="sp"><span class="grade">${G[p.id].grade.toFixed(1)}</span></div>
       <div class="row" style="margin-top:8px;flex-wrap:wrap"><label class="mute" style="cursor:pointer"><input type="checkbox" ${p.regular ? 'checked' : ''} data-c="preg" data-p="${p.id}"> ⭐ Regular</label>
-      <label class="mute">Start <input type="number" step="0.5" min="1" max="10" value="${p.seed ?? 5}" data-c="pseed" data-p="${p.id}"></label>
+      <label class="mute">Start grade <input type="number" step="0.5" min="1" max="10" value="${p.seed ?? 5}" data-c="pseed" data-p="${p.id}"></label>
       <label class="mute">Adjust <input type="number" step="0.5" min="-3" max="3" value="${p.adj || 0}" data-c="padj" data-p="${p.id}"></label>
       <span class="sp"></span><button class="sm" data-a="toggleActive" data-p="${p.id}">${p.inactive ? 'Restore' : 'Retire'}</button><button class="sm danger" data-a="deletePlayer" data-p="${p.id}">Delete</button></div></div>`).join('') || '<div class="empty">Add your first players above</div>'}`;
 }
@@ -735,7 +1100,7 @@ function viewSettings() {
     <input type="number" inputmode="numeric" min="${min}" max="${max}" value="${c[k]}" data-c="set" data-k="${k}" data-min="${min}" data-max="${max}"></div>`;
   const chk = (k, label, hint) => `<label class="row" style="${line};cursor:pointer"><div class="sp"><div>${label}</div>${hint ? `<div class="mute">${hint}</div>` : ''}</div>
     <input type="checkbox" ${c[k] ? 'checked' : ''} data-c="set" data-k="${k}"></label>`;
-  return `<div class="card"><b>Game</b>${num('matchMins', 'Game length (minutes)', 1, 60)}${num('extraMins', 'Extra time (minutes)', 0, 15, 'Set to 0 to turn extra time off')}
+  return `${langCard()}<div class="card"><b>Game</b>${num('matchMins', 'Game length (minutes)', 1, 60)}${num('extraMins', 'Extra time (minutes)', 0, 15, 'Set to 0 to turn extra time off')}
       ${chk('extraTied', 'Offer extra time when tied', 'Shown at full time if the score is level')}${chk('sound', 'Sound & vibration at full time')}</div>
     <div class="card"><b>Teams</b>${num('teams', 'Number of teams', 2, 4)}${num('perSide', 'Players per team', 2, 11, 'For example 5 means 5 vs 5')}
       ${chk('allowSubs', 'Allow substitutes (bench)', 'Off: you need exactly teams × players per team. On: extra players wait on a bench and can be swapped in during a game.')}
@@ -751,7 +1116,7 @@ const backupsCard = () => {
   if (!cloud.on || RO()) return '';
   const b = ui.backups;
   const rows = Array.isArray(b)
-    ? (b.length ? b.map(x => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><div class="sp"><div>${esc(new Date(x.created_at).toLocaleString())}</div><div class="mute">${esc(x.label || 'Backup')} · ${x.players} players, ${x.nights} nights</div></div><button class="sm" data-a="restoreBackup" data-id="${x.id}">Restore</button></div>`).join('') : '<div class="mute">No backups yet.</div>')
+    ? (b.length ? b.map(x => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><div class="sp"><div>${esc(new Date(x.created_at).toLocaleString(LANG === 'he' ? 'he-IL' : undefined))}</div><div class="mute">${esc(x.label || 'Backup')} · ${pl(x.players, 'player')}, ${pl(x.nights, 'night')}</div></div><button class="sm" data-a="restoreBackup" data-id="${x.id}">Restore</button></div>`).join('') : '<div class="mute">No backups yet.</div>')
     : b === 'na' ? '<div class="mute">Backups need the latest database update (run supabase-update.sql in Supabase).</div>' : '<div class="mute">Loading…</div>';
   return `<div class="card"><b>Automatic backups</b><p class="mute">A copy is saved after every finished night and before anything is deleted. The latest 25 are kept.</p><button data-a="backupNowBtn" style="margin-bottom:8px">Back up now</button>${rows}</div>`;
 };
@@ -759,7 +1124,7 @@ const acctCard = () => cloud.on ? `<div class="card"><b>Group: ${esc(cloud.name)
   ${RO() ? '' : `<div class="row" style="margin-bottom:10px"><input id="newgname" value="${esc(cloud.name)}" class="sp" placeholder="Group name" autocomplete="off"><button data-a="renameGroup">Rename</button></div>
   <details style="margin-bottom:10px"><summary class="mute" style="cursor:pointer">Change passwords</summary><div class="grid" style="margin-top:8px"><input id="newview" type="password" placeholder="New viewer password (empty = keep)" autocomplete="new-password"><input id="newadmin" type="password" placeholder="New admin password (empty = keep)" autocomplete="new-password"><button data-a="changeCodes">Change passwords</button></div></details>`}<button data-a="logout">Sign out</button></div>` : '';
 function viewData() {
-  if (RO()) return acctCard();
+  if (RO()) return langCard() + acctCard();
   return `<div class="card"><b>Backup</b><p class="mute">${cloud.on ? 'Data is stored in the shared database. A backup file is still a good safety copy.' : 'All data is stored on this device only. Export a backup regularly, and use it to move data to another phone.'}</p>
     <div class="row"><button class="pri" data-a="export">Export backup</button><button data-a="importPick">Import backup</button></div>
     <input type="file" id="file" accept="application/json" hidden></div>`;
@@ -777,7 +1142,7 @@ function sheetHtml() {
   if (s.type === 'finish') {
     return `<h2 style="margin-top:0">Night saved ✅</h2><p class="mute">Grades updated:</p>
       ${s.changes.length ? s.changes.map(c => `<div class="row" style="padding:5px 0"><span class="sp">${esc(c.name)}</span><span class="mute">${c.from.toFixed(1)} →</span><span class="grade">${c.to.toFixed(1)}</span>
-      <b class="${c.to >= c.from ? 'up' : 'down'}" style="width:52px;text-align:right">${c.to >= c.from ? '+' : ''}${(c.to - c.from).toFixed(1)}</b></div>`).join('') : '<div class="mute">No changes</div>'}
+      <b class="${r1(c.to - c.from) === 0 ? 'mute' : c.to > c.from ? 'up' : 'down'}" style="width:52px;text-align:end">${r1(c.to - c.from) > 0 ? '+' : ''}${r1(c.to - c.from).toFixed(1)}</b></div>`).join('') : '<div class="mute">No changes</div>'}
       <div class="row" style="margin-top:12px"><button data-a="shareNight" data-id="${s.nid}">Share result card</button><span class="sp"></span><button class="pri" data-a="closeSheet">Done</button></div>`;
   }
   if (s.type === 'player') {
@@ -824,6 +1189,7 @@ function sheetHtml() {
 
 /* ---------- actions ---------- */
 const A = {
+  setLang: d => { setLang(d.l); },
   login: () => { doLogin(document.getElementById('grp').value.trim(), document.getElementById('code').value.trim(), false); },
   renameGroup: () => { doRename(); },
   showCreate: () => { cloud.mode = 'create'; cloud.err = ''; },
@@ -1003,7 +1369,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-stop]') && !e.target.closest('[data-a]')) return;
   const t = e.target.closest('[data-a]'); if (!t) return;
   const f = A[t.dataset.a]; if (!f) return;
-  if (cloud.on && (!cloud.authed || RO()) && !['tab', 'view', 'sort', 'player', 'closeSheet', 'login', 'logout', 'showCreate', 'showLogin', 'createGroup', 'range', 'shareNight', 'hideHint', 'install', 'openH2h'].includes(t.dataset.a)) return;
+  if (cloud.on && (!cloud.authed || RO()) && !['tab', 'view', 'sort', 'player', 'closeSheet', 'login', 'logout', 'showCreate', 'showLogin', 'createGroup', 'range', 'shareNight', 'hideHint', 'install', 'openH2h', 'setLang'].includes(t.dataset.a)) return;
   f(t.dataset); render();
 });
 document.addEventListener('change', e => {
@@ -1027,6 +1393,7 @@ document.addEventListener('change', e => {
     if (!ui.timer || !ui.timer.running) { ui.timer = null; saveTimer(); }
     save();
   }
+  else if (c === 'lang') { setLang(t.value); return; }
   else if (c === 'h2ha') { ui.h2h.a = t.value; if (ui.h2h.b === t.value) ui.h2h.b = ''; }
   else if (c === 'h2hb') { ui.h2h.b = t.value; }
   else if (c === 'pname') { if (t.value.trim()) p.name = t.value.trim(); save(); }
@@ -1036,6 +1403,7 @@ document.addEventListener('change', e => {
   render();
 });
 
+applyLang();
 if (cloud.on) { render(); if (cloud.group) doLogin(cloud.group, cloud.code, true); } else render();
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.target.id === 'code' || e.target.id === 'grp')) A.login(); });
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});

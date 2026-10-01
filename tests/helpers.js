@@ -56,7 +56,7 @@ function makeMockServer() {
 }
 
 /* ---------- app loader ---------- */
-async function loadApp({ mock = null, storage = {}, config = null } = {}) {
+async function loadApp({ mock = null, storage = {}, config = null, navLang = null } = {}) {
   const alerts = [], confirms = [];
   const dom = new JSDOM(HTML, {
     url: 'http://localhost/',
@@ -64,6 +64,7 @@ async function loadApp({ mock = null, storage = {}, config = null } = {}) {
     pretendToBeVisual: true,
     beforeParse(w) {
       Object.entries(storage).forEach(([k, v]) => w.localStorage.setItem(k, v));
+      if (navLang) Object.defineProperty(w.navigator, 'language', { value: navLang, configurable: true });
       w.MF_CONFIG = mock ? { url: 'https://mock.local', key: 'k' } : (config || { url: '', key: '' });
       if (mock) w.fetch = mock.fetch;
       w.alert = m => alerts.push(String(m));

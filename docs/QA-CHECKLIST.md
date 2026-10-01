@@ -46,6 +46,20 @@ Phone: ____________  Browser: ____________  Date: ____________  App version/comm
 - [ ] Airplane mode: the app still opens with the last data and says "Offline"; log a goal; turn airplane mode off — the header changes to "Saved ✓" within ~10 seconds and a second phone sees the goal.
 - [ ] Five wrong passwords in a row show no lock; after 10 within 10 minutes the sign-in says "Too many wrong attempts" (try only on a test group).
 
+## 6b. Head to head
+- [ ] Stats → Head to head: pick a player: tables of opponents and teammates make sense (W/D/L from that player's view).
+- [ ] Pick a second player: three tiles (wins / draws / wins), the goals line, and the same-team win rate. Swap the two players: the tiles swap too.
+- [ ] A player card (Stats → tap a player) shows form, streak, best partner and toughest/favourite opponent, and its "Head to head" button opens that player.
+
+## 6c. Hebrew / right-to-left
+- [ ] Settings → Language → עברית (or the toggle on the sign-in screen). Everything switches at once; no English words remain on any screen, popup, confirmation or error.
+- [ ] The whole layout mirrors: header title on the right, tab bar order reversed, labels on the right with inputs on the left, tables start from the right.
+- [ ] In a game, the first team (Red) is on the right, and its score is the right-hand number. Goal log, toast, timer, substitution sheets read naturally.
+- [ ] Mixed text is fine: English player names and numbers appear inside Hebrew sentences without scrambling.
+- [ ] Share card in Hebrew: title right-aligned, team names in Hebrew, each team's colour dot next to its own name.
+- [ ] Switch back to English: nothing is left in Hebrew and the layout returns to left-to-right. Close and reopen the app: the chosen language is remembered.
+- [ ] Dark mode in Hebrew is readable.
+
 ## 7. Look and feel
 - [ ] Light mode and dark mode both readable (switch the phone setting).
 - [ ] Rotate the phone: nothing is cut off.
