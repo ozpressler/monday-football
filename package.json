@@ -1,0 +1,12 @@
+{
+  "name": "monday-night-football",
+  "private": true,
+  "description": "Monday Night Football PWA",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "test:live": "node tests/run-live.js"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}
