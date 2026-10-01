@@ -204,6 +204,7 @@ function updateSub() {
 const uid = () => Math.random().toString(36).slice(2, 9);
 const today = () => new Date().toLocaleDateString('en-CA');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pl = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const r1 = x => Math.round(x * 10) / 10;
 const COLORS = [{ n: 'Red', c: '#e5484d' }, { n: 'Blue', c: '#3e63dd' }, { n: 'Yellow', c: '#f5c400' }, { n: 'Green', c: '#30a46c' }];
@@ -345,7 +346,7 @@ function curMinute(m) {
 const goalsSorted = m => m.goals.map((g, i) => [g, i]).sort((a, b) => (a[0].min ?? 9999) - (b[0].min ?? 9999) || a[1] - b[1]).map(x => x[0]);
 
 /* ---------- UI state ---------- */
-const ui = { backups: null, range: 'all', installEvt: null, timer: null, tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
+const ui = { h2h: { a: '', b: '' }, backups: null, range: 'all', installEvt: null, timer: null, tab: 'night', draft: null, matchId: null, sort: { k: 'grade', d: -1 }, view: 'players', sheet: null, nm: {} };
 
 try { ui.timer = JSON.parse(lsGet('mf.timer') || 'null'); } catch { }
 const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone;
@@ -646,15 +647,61 @@ function chartsHtml(nights, R, ps) {
   return `<div class="card"><b>Goals per night</b><svg viewBox="0 0 ${W} ${H}" width="100%">${bars}</svg></div>
     ${tops.length ? `<div class="card"><b>Goals + assists</b> <span class="mute">(goals · assists)</span>${hb}</div>` : ''}`;
 }
+/* ---------- head to head ---------- */
+const zeroVs = () => ({ gp: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 });
+/** for one player: how they fare against, and with, every other player */
+function relations(nights, pid) {
+  const R = {};
+  const rec = q => R[q] || (R[q] = { vs: zeroVs(), tm: { gp: 0, w: 0, d: 0, l: 0 } });
+  nights.forEach(n => n.matches.forEach(m => {
+    const ta = teamOf(n, m.a), tb = teamOf(n, m.b); if (!ta || !tb) return;
+    const sides = [playedBy(n, m, m.a), playedBy(n, m, m.b)], sc = [score(m, m.a), score(m, m.b)];
+    const i = sides.findIndex(sq => sq.includes(pid)); if (i < 0) return;
+    const f = sc[i], c = sc[1 - i], res = f > c ? 'w' : f === c ? 'd' : 'l';
+    sides[i].forEach(q => { if (q !== pid) { const e = rec(q).tm; e.gp++; e[res]++; } });
+    sides[1 - i].forEach(q => { if (q !== pid && !sides[i].includes(q)) { const e = rec(q).vs; e.gp++; e[res]++; e.gf += f; e.ga += c; } });
+  }));
+  return R;
+}
+const pctOf = e => e.gp ? Math.round((e.w + e.d / 2) / e.gp * 100) : 0;
+function h2hHtml(nights) {
+  const ps = activePlayers();
+  if (ps.length < 2) return '<div class="empty">Add at least two players.</div>';
+  if (!nights.length) return '<div class="empty">Finish a night to see head to head.</div>';
+  const a = ui.h2h.a && P(ui.h2h.a) ? ui.h2h.a : ps[0].id, b = ui.h2h.b && P(ui.h2h.b) && ui.h2h.b !== a ? ui.h2h.b : '';
+  const opts = (sel, any) => (any ? `<option value="" ${!sel ? 'selected' : ''}>All players</option>` : '') + ps.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  const pick = `<div class="card"><div class="row"><select data-c="h2ha" class="sp">${opts(a)}</select><span>vs</span><select data-c="h2hb" class="sp">${opts(b, true)}</select></div></div>`;
+  const rel = relations(nights, a), A = P(a);
+  if (b) {
+    const B = P(b), r = rel[b] || { vs: zeroVs(), tm: { gp: 0, w: 0, d: 0, l: 0 } };
+    const tile = (label, val, sub) => `<div class="card" style="margin:0;text-align:center"><div class="mute" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div><b style="font-size:26px">${val}</b><div class="mute">${sub}</div></div>`;
+    const against = r.vs.gp
+      ? `<div class="grid" style="grid-template-columns:repeat(3,1fr)">${tile(esc(A.name), r.vs.w, 'wins')}${tile('=', r.vs.d, 'draws')}${tile(esc(B.name), r.vs.l, 'wins')}</div>
+         <p class="mute" style="margin-bottom:0">${pl(r.vs.gp, 'game')} against each other · goals ${r.vs.gf}–${r.vs.ga}</p>`
+      : '<div class="mute">Never played against each other.</div>';
+    const together = r.tm.gp
+      ? `<div class="row"><b style="font-size:26px">${pctOf(r.tm)}%</b><span class="mute">win rate · ${pl(r.tm.gp, 'game')} · ${r.tm.w}-${r.tm.d}-${r.tm.l}</span></div>`
+      : '<div class="mute">Never played on the same team.</div>';
+    return pick + `<div class="card"><b>Against each other</b><div style="margin-top:8px">${against}</div></div><div class="card"><b>On the same team</b><div style="margin-top:8px">${together}</div></div>`;
+  }
+  const others = ps.filter(p => p.id !== a);
+  const vsRows = others.filter(p => rel[p.id] && rel[p.id].vs.gp).sort((x, y) => rel[y.id].vs.gp - rel[x.id].vs.gp || x.name.localeCompare(y.name));
+  const tmRows = others.filter(p => rel[p.id] && rel[p.id].tm.gp).sort((x, y) => pctOf(rel[y.id].tm) - pctOf(rel[x.id].tm) || rel[y.id].tm.gp - rel[x.id].tm.gp);
+  const vsTable = vsRows.length ? `<table><tr><th>Opponent</th><th>GP</th><th>W</th><th>D</th><th>L</th><th>GD</th></tr>${vsRows.map(p => { const e = rel[p.id].vs; return `<tr><td>${esc(p.name)}</td><td>${e.gp}</td><td>${e.w}</td><td>${e.d}</td><td>${e.l}</td><td>${e.gf - e.ga > 0 ? '+' : ''}${e.gf - e.ga}</td></tr>`; }).join('')}</table>` : '<div class="mute">No games against others yet.</div>';
+  const tmTable = tmRows.length ? `<table><tr><th>Teammate</th><th>GP</th><th>W-D-L</th><th>Win%</th></tr>${tmRows.map(p => { const e = rel[p.id].tm; return `<tr><td>${esc(p.name)}</td><td>${e.gp}</td><td>${e.w}-${e.d}-${e.l}</td><td>${pctOf(e)}%</td></tr>`; }).join('')}</table>` : '<div class="mute">No games with teammates yet.</div>';
+  return pick + `<div class="card" style="overflow:auto"><b>${esc(A.name)} against</b>${vsTable}</div><div class="card" style="overflow:auto"><b>${esc(A.name)} with</b>${tmTable}</div>
+    <p class="mute">Wins, draws and losses are from ${esc(A.name)}'s point of view. Pick a second player to compare two people directly.</p>`;
+}
 function viewStats() {
-  const tabs = `<div class="tabs"><button class="${ui.view === 'players' ? 'on' : ''}" data-a="view" data-k="players">Players</button><button class="${ui.view === 'awards' ? 'on' : ''}" data-a="view" data-k="awards">Awards</button><button class="${ui.view === 'nights' ? 'on' : ''}" data-a="view" data-k="nights">Nights</button></div>`;
+  const tabs = `<div class="tabs"><button class="${ui.view === 'players' ? 'on' : ''}" data-a="view" data-k="players">Players</button><button class="${ui.view === 'awards' ? 'on' : ''}" data-a="view" data-k="awards">Awards</button><button class="${ui.view === 'h2h' ? 'on' : ''}" data-a="view" data-k="h2h">Head to head</button><button class="${ui.view === 'nights' ? 'on' : ''}" data-a="view" data-k="nights">Nights</button></div>`;
   const ranges = `<div class="tabs">${[['all', 'All time'], ['30d', 'Last 30 days'], ['10n', 'Last 10 nights']].map(([k, l]) => `<button class="sm ${ui.range === k ? 'on' : ''}" data-a="range" data-k="${k}">${l}</button>`).join('')}</div>`;
   if (ui.view === 'nights') {
     const ns = finishedNights().slice().reverse();
-    return tabs + (ns.map(n => `<div class="card"><div class="row"><b class="sp">${esc(n.date)}</b><span class="mute">${n.matches.length} games</span><button class="sm" data-a="shareNight" data-id="${n.id}">Share</button>${RO() ? '' : `<button class="sm" data-a="reopen" data-id="${n.id}">Reopen</button>`}</div>
+    return tabs + (ns.map(n => `<div class="card"><div class="row"><b class="sp">${esc(n.date)}</b><span class="mute">${pl(n.matches.length, 'game')}</span><button class="sm" data-a="shareNight" data-id="${n.id}">Share</button>${RO() ? '' : `<button class="sm" data-a="reopen" data-id="${n.id}">Reopen</button>`}</div>
       ${n.matches.map(m => { const a = teamOf(n, m.a), b = teamOf(n, m.b); return `<div class="mute">${esc(a.name)} ${score(m, m.a)} – ${score(m, m.b)} ${esc(b.name)}</div>`; }).join('')}</div>`).join('') || '<div class="empty">No finished nights yet</div>');
   }
   if (ui.view === 'awards') return tabs + ranges + awardsHtml(rangeNights());
+  if (ui.view === 'h2h') return tabs + ranges + h2hHtml(rangeNights());
   const R = analyze(rangeNights()), G = grades();
   const cols = [['grade', 'Grade'], ['gp', 'GP'], ['wr', 'Win%'], ['g', 'G'], ['a', 'A'], ['ga', 'G+A'], ['gpg', 'G+A/gm']];
   const val = (p, k) => { const r = R[p.id]; return k === 'name' ? p.name.toLowerCase() : k === 'grade' ? G[p.id].grade : k === 'gp' ? r.gp : k === 'wr' ? (r.gp ? (r.w + r.d / 2) / r.gp : -1) : k === 'g' ? r.g : k === 'a' ? r.a : k === 'ga' ? r.g + r.a : (r.gp ? (r.g + r.a) / r.gp : -1); };
@@ -745,11 +792,15 @@ function sheetHtml() {
     const seq = resultSeqs(nights)[p.id], last5 = seq.slice(-5), partner = partnerStats(nights, p.id)[0];
     const chip = x => `<span class="pill" style="background:${x.r === 'W' ? 'var(--accent)' : x.r === 'D' ? 'var(--line)' : 'var(--warn)'};color:${x.r === 'W' ? 'var(--accent-ink)' : x.r === 'D' ? 'var(--ink)' : 'var(--bg)'};font-weight:700">${x.r}</span>`;
     const ws = streakOf(seq, 'W'), ls = streakOf(seq, 'L');
-    const extra = `<div style="margin:12px 0 4px"><div class="mute">Form (last ${last5.length} games)</div><div>${last5.map(chip).join('') || '<span class="mute">No games yet</span>'}</div></div>
+    const extra = `<div style="margin:12px 0 4px"><div class="mute">Form (last ${pl(last5.length, 'game')})</div><div>${last5.map(chip).join('') || '<span class="mute">No games yet</span>'}</div></div>
       <div class="mute">${ws.now >= 2 ? `🔥 ${ws.now} wins in a row · ` : ls.now >= 2 ? `🥶 ${ls.now} losses in a row · ` : ''}Best win streak: ${ws.best}${partner ? ` · Wins most with <b>${esc(P(partner.id).name)}</b> (${Math.round(partner.wr * 100)}% in ${partner.gp} games)` : ''}</div>`;
+    const rel = relations(nights, p.id), vsList = Object.entries(rel).filter(([q, e]) => P(q) && e.vs.gp >= 3).map(([q, e]) => ({ q, e: e.vs, pc: pctOf(e.vs) }));
+    const tough = vsList.slice().sort((x, y) => x.pc - y.pc || y.e.gp - x.e.gp)[0], fav = vsList.slice().sort((x, y) => y.pc - x.pc || y.e.gp - x.e.gp)[0];
+    const rivalLine = (label, r) => r ? `<div style="margin-top:4px"><span class="mute">${label}</span> <b>${esc(P(r.q).name)}</b> <span class="mute">(${r.pc}% · ${r.e.gp} games)</span></div>` : '';
+    const rivals = (tough && fav && tough.q !== fav.q) ? rivalLine('Toughest opponent', tough) + rivalLine('Favourite opponent', fav) : '';
     const st = [['Grade', R.grade.toFixed(1)], ['Games', R.gp], ['Nights', R.nt], ['W-D-L', `${R.w}-${R.d}-${R.l}`], ['Goals', R.g], ['Assists', R.a], ['Goal diff', R.gf - R.ga], ['Win %', R.gp ? Math.round((R.w + R.d / 2) / R.gp * 100) + '%' : '–']];
-    return `<h2 style="margin-top:0">${esc(p.name)}</h2><div class="grid g2">${st.map(([l, v]) => `<div class="card" style="margin:0"><div class="mute">${l}</div><b style="font-size:20px">${v}</b></div>`).join('')}</div>${extra}${spark}
-      <button data-a="closeSheet" style="width:100%;margin-top:12px">Close</button>`;
+    return `<h2 style="margin-top:0">${esc(p.name)}</h2><div class="grid g2">${st.map(([l, v]) => `<div class="card" style="margin:0"><div class="mute">${l}</div><b style="font-size:20px">${v}</b></div>`).join('')}</div>${extra}${rivals}${spark}
+      <div class="row" style="margin-top:12px"><button data-a="openH2h" data-id="${p.id}">Head to head</button><span class="sp"></span><button class="pri" data-a="closeSheet">Close</button></div>`;
   }
   if (s.type === 'subOut') {
     const n = activeNight(), m = n.matches.find(x => x.id === ui.matchId);
@@ -788,6 +839,7 @@ const A = {
   sort: d => { ui.sort = ui.sort.k === d.k ? { k: d.k, d: -ui.sort.d } : { k: d.k, d: d.k === 'name' ? 1 : -1 }; },
   player: d => { ui.sheet = { type: 'player', pid: d.id }; },
   startDraft,
+  openH2h: d => { ui.h2h = { a: d.id, b: '' }; ui.view = 'h2h'; ui.sheet = null; ui.tab = 'stats'; },
   range: d => { ui.range = d.k; },
   shareNight: d => { shareNight(d.id); },
   install: () => { const e = ui.installEvt; ui.installEvt = null; if (e) e.prompt(); },
@@ -881,7 +933,7 @@ const A = {
   discardNight: () => { if (!confirm('Discard tonight completely? All games will be lost.')) return; backupNow('Before discarding a night'); S.nights = S.nights.filter(n => n.finished); ui.matchId = null; save(); },
   finishNight: () => {
     const n = activeNight();
-    if (!confirm(`Finish the night (${n.matches.length} games) and update grades?`)) return;
+    if (!confirm(`Finish the night (${pl(n.matches.length, 'game')}) and update grades?`)) return;
     const before = grades(); n.finished = true; n.matches.forEach(m => m.saved = true); save(); backupNow(`After night ${n.date}`); const after = grades();
     const changes = S.players.filter(p => n.teams.some(t => t.playerIds.includes(p.id)))
       .map(p => ({ name: p.name, from: before[p.id].grade, to: after[p.id].grade })).sort((a, b) => (b.to - b.from) - (a.to - a.from));
@@ -951,7 +1003,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-stop]') && !e.target.closest('[data-a]')) return;
   const t = e.target.closest('[data-a]'); if (!t) return;
   const f = A[t.dataset.a]; if (!f) return;
-  if (cloud.on && (!cloud.authed || RO()) && !['tab', 'view', 'sort', 'player', 'closeSheet', 'login', 'logout', 'showCreate', 'showLogin', 'createGroup', 'range', 'shareNight', 'hideHint', 'install'].includes(t.dataset.a)) return;
+  if (cloud.on && (!cloud.authed || RO()) && !['tab', 'view', 'sort', 'player', 'closeSheet', 'login', 'logout', 'showCreate', 'showLogin', 'createGroup', 'range', 'shareNight', 'hideHint', 'install', 'openH2h'].includes(t.dataset.a)) return;
   f(t.dataset); render();
 });
 document.addEventListener('change', e => {
@@ -975,6 +1027,8 @@ document.addEventListener('change', e => {
     if (!ui.timer || !ui.timer.running) { ui.timer = null; saveTimer(); }
     save();
   }
+  else if (c === 'h2ha') { ui.h2h.a = t.value; if (ui.h2h.b === t.value) ui.h2h.b = ''; }
+  else if (c === 'h2hb') { ui.h2h.b = t.value; }
   else if (c === 'pname') { if (t.value.trim()) p.name = t.value.trim(); save(); }
   else if (c === 'preg') { p.regular = t.checked; save(); }
   else if (c === 'pseed') { p.seed = clamp(+t.value || 5, 1, 10); save(); }
